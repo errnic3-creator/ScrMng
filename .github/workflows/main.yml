@@ -35,9 +35,17 @@ jobs:
           mkdir -p app
           cat << 'EOF' > app/google-services.json
           {
-            "project_info": { "project_number": "123456789", "project_id": "mock-project" },
+            "project_info": { 
+              "project_number": "123456789", 
+              "project_id": "mock-project" 
+            },
             "client": [{
-              "client_info": { "mobilesdk_app_id": "1:123456789:android:123456789" },
+              "client_info": { 
+                "mobilesdk_app_id": "1:123456789:android:123456789",
+                "android_client_info": {
+                  "package_name": "com.aistudio.screentimelock.vzkq"
+                }
+              },
               "oauth_client": [],
               "api_key": [{ "current_key": "mock_api_key" }]
             }]
