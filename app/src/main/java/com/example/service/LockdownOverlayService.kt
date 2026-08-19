@@ -124,6 +124,20 @@ class LockdownOverlayService : Service() {
         const val EXTRA_LOCK_UNTIL = "extra_lock_until"
         const val ACTION_DISMISS = "com.example.action.DISMISS_OVERLAY"
 
+        fun show(context: Context, packageName: String, appName: String, reason: String, lockUntil: Long) {
+            val intent = Intent(context, LockdownOverlayService::class.java).apply {
+                putExtra(EXTRA_PACKAGE_NAME, packageName)
+                putExtra(EXTRA_APP_NAME, appName)
+                putExtra(EXTRA_REASON, reason)
+                putExtra(EXTRA_LOCK_UNTIL, lockUntil)
+            }
+            try {
+                context.startService(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         fun dismiss(context: Context) {
             val intent = Intent(context, LockdownOverlayService::class.java).apply {
                 action = ACTION_DISMISS

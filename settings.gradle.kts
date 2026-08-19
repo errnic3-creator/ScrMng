@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "ScreenTime Lock"
+rootProject.name = "ScrMngr"
 
 include(":app")

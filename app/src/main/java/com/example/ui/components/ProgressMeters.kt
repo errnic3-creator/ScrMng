@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -13,15 +12,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -30,7 +26,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,14 +36,19 @@ import com.example.ui.theme.WarningOrange
 
 @Composable
 fun UsageProgressBar(
+    current: Int = 0,
+    max: Int = 0,
+    currentValue: Int = current,
+    maxValue: Int = max,
     label: String,
-    currentValue: Int,
-    maxValue: Int,
     unit: String,
     windowDescription: String = "",
+    subLabel: String = "",
     modifier: Modifier = Modifier
 ) {
-    val progress = if (maxValue > 0) (currentValue.toFloat() / maxValue.toFloat()).coerceIn(0f, 1f) else 0f
+    val actualCurrent = if (currentValue != 0) currentValue else current
+    val actualMax = if (maxValue != 0) maxValue else max
+    val progress = if (actualMax > 0) (actualCurrent.toFloat() / actualMax.toFloat()).coerceIn(0f, 1f) else 0f
     val animatedProgress by animateFloatAsState(targetValue = progress, label = "progress")
 
     val progressColor = when {
@@ -63,24 +63,34 @@ fun UsageProgressBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (windowDescription.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(4.dp))
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "($windowDescription)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (windowDescription.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "($windowDescription)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (subLabel.isNotEmpty()) {
+                    Text(
+                        text = subLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
             Text(
-                text = "$currentValue / $maxValue $unit",
+                text = "$actualCurrent / $actualMax $unit",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
                 color = progressColor
@@ -111,28 +121,40 @@ fun UsageProgressBar(
 fun StatusBadge(
     isLocked: Boolean,
     isUnderOverride: Boolean,
-    isLimitEnabled: Boolean,
+    isEnabled: Boolean = true,
+    isLimitEnabled: Boolean = isEnabled,
+    overrideSecondsLeft: Long = 0L,
+    lockSecondsLeft: Long = 0L,
     modifier: Modifier = Modifier
 ) {
+    val effectiveLimitEnabled = if (isLimitEnabled) isEnabled else isLimitEnabled
     val (bgColor, contentColor, text, icon) = when {
-        !isLimitEnabled -> Quadruple(
+        !effectiveLimitEnabled -> Quadruple(
             MaterialTheme.colorScheme.surfaceVariant,
             MaterialTheme.colorScheme.onSurfaceVariant,
             "Paused",
             Icons.Default.LockOpen
         )
-        isUnderOverride -> Quadruple(
-            OverridePurple.copy(alpha = 0.15f),
-            OverridePurple,
-            "Override Active",
-            Icons.Default.HourglassBottom
-        )
-        isLocked -> Quadruple(
-            LockdownRed.copy(alpha = 0.15f),
-            LockdownRed,
-            "Locked Down",
-            Icons.Default.Lock
-        )
+        isUnderOverride -> {
+            val mins = (overrideSecondsLeft / 60).toInt()
+            val textDisplay = if (mins > 0) "Override ($mins m)" else "Override Active"
+            Quadruple(
+                OverridePurple.copy(alpha = 0.15f),
+                OverridePurple,
+                textDisplay,
+                Icons.Default.HourglassBottom
+            )
+        }
+        isLocked -> {
+            val mins = (lockSecondsLeft / 60).toInt()
+            val textDisplay = if (mins > 0) "Locked ($mins m)" else "Locked Down"
+            Quadruple(
+                LockdownRed.copy(alpha = 0.15f),
+                LockdownRed,
+                textDisplay,
+                Icons.Default.Lock
+            )
+        }
         else -> Quadruple(
             SuccessGreen.copy(alpha = 0.15f),
             SuccessGreen,

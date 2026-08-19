@@ -53,4 +53,7 @@ interface TrackedAppDao {
 
     @Query("UPDATE tracked_apps SET isLocked = 0, lockReason = '', lockUntilTimestamp = 0 WHERE packageName = :packageName")
     suspend fun unlockApp(packageName: String)
+
+    @Query("DELETE FROM tracked_apps")
+    suspend fun clearAll()
 }

@@ -54,6 +54,10 @@
             android:name=".service.LockdownOverlayService"
             android:exported="false" />
 
+        <service
+            android:name=".service.FloatingTimerOverlayService"
+            android:exported="false" />
+
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">

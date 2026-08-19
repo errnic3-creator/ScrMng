@@ -1,7 +1,6 @@
 package com.example
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,7 +21,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,6 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ui.navigation.Screen
 import com.example.ui.screens.ActivityLogsScreen
+import com.example.ui.screens.AdvancedScreen
 import com.example.ui.screens.AppDetailLimitScreen
 import com.example.ui.screens.AppPickerScreen
 import com.example.ui.screens.DashboardScreen
@@ -53,7 +52,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            ScreenTimeTheme {
+            val currentTheme by viewModel.selectedTheme.collectAsStateWithLifecycle()
+            ScreenTimeTheme(themeKey = currentTheme) {
                 MainApp(viewModel = viewModel)
             }
         }
@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.checkPermissions()
+        viewModel.refreshUsage()
     }
 }
 
@@ -70,10 +71,13 @@ fun MainApp(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val context = LocalContext.current
 
     val feedbackMessage by viewModel.feedbackMessage.collectAsStateWithLifecycle()
+    val isUsagePermissionGranted by viewModel.isUsagePermissionGranted.collectAsStateWithLifecycle()
+    val isOverlayPermissionGranted by viewModel.isOverlayPermissionGranted.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val allPermissionsGranted = isUsagePermissionGranted && isOverlayPermissionGranted
 
     LaunchedEffect(feedbackMessage) {
         feedbackMessage?.let { msg ->
@@ -82,13 +86,8 @@ fun MainApp(viewModel: MainViewModel) {
         }
     }
 
-    val bottomNavItems = listOf(
-        Screen.Dashboard,
-        Screen.AppPicker,
-        Screen.Permissions,
-        Screen.ActivityLogs,
-        Screen.Settings
-    )
+    // 4 Core Bottom Navigation Tabs: Home, Advanced, History, Settings
+    val bottomNavItems = Screen.bottomNavItems
 
     val showBottomBar = currentRoute in bottomNavItems.map { it.route }
 
@@ -142,10 +141,10 @@ fun MainApp(viewModel: MainViewModel) {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Screen.Dashboard.route,
+            startDestination = if (allPermissionsGranted) Screen.Home.route else Screen.Permissions.route,
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable(Screen.Dashboard.route) {
+            composable(Screen.Home.route) {
                 DashboardScreen(
                     viewModel = viewModel,
                     onNavigateToAppPicker = { navController.navigate(Screen.AppPicker.route) },
@@ -154,6 +153,10 @@ fun MainApp(viewModel: MainViewModel) {
                         navController.navigate(Screen.AppDetail.createRoute(packageName))
                     }
                 )
+            }
+
+            composable(Screen.Advanced.route) {
+                AdvancedScreen(viewModel = viewModel)
             }
 
             composable(Screen.AppPicker.route) {
@@ -168,11 +171,11 @@ fun MainApp(viewModel: MainViewModel) {
             composable(Screen.Permissions.route) {
                 PermissionsScreen(
                     viewModel = viewModel,
-                    onContinue = { navController.navigate(Screen.Dashboard.route) }
+                    onContinue = { navController.navigate(Screen.Home.route) }
                 )
             }
 
-            composable(Screen.ActivityLogs.route) {
+            composable(Screen.History.route) {
                 ActivityLogsScreen(viewModel = viewModel)
             }
 

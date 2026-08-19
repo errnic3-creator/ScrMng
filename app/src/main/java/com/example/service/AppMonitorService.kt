@@ -5,13 +5,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.ScreenTimeApplication
-import com.example.data.model.TrackedAppEntity
 import com.example.data.util.UsageStatsHelper
 import com.example.ui.lockdown.LockdownActivity
 import kotlinx.coroutines.CoroutineScope
@@ -23,176 +23,213 @@ import kotlinx.coroutines.launch
 
 class AppMonitorService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
-    private var monitorJob: Job? = null
+    private val serviceJob = Job()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
-    private val repository by lazy { (application as ScreenTimeApplication).repository }
-    private val settings by lazy { (application as ScreenTimeApplication).settings }
-
-    private var lastObservedForegroundPackage: String? = null
-    private var lastLockTriggerTime: Long = 0L
+    private var isMonitoring = false
+    private var lastHandledPackage: String? = null
+    private var lastNotificationTime: Long = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        startForegroundWithNotification()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP_SERVICE -> {
-                stopMonitoring()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_CHECK_NOW -> {
-                serviceScope.launch {
-                    checkForegroundAppLimits()
-                }
-            }
-            else -> {
-                startForeground(NOTIFICATION_ID, buildForegroundNotification())
-                startMonitoring()
-            }
+        if (!isMonitoring) {
+            isMonitoring = true
+            startMonitoringLoop()
         }
         return START_STICKY
     }
 
-    private fun startMonitoring() {
-        monitorJob?.cancel()
-        monitorJob = serviceScope.launch {
-            while (isActive) {
-                if (settings.isMonitorServiceEnabled && UsageStatsHelper.hasUsageStatsPermission(this@AppMonitorService)) {
-                    checkForegroundAppLimits()
+    private fun startForegroundWithNotification() {
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification: Notification = NotificationCompat.Builder(this, ScreenTimeApplication.CHANNEL_MONITOR_SERVICE)
+            .setContentTitle("ScrMngr Limit Guard")
+            .setContentText("Monitoring app launch frequency & screen time")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun startMonitoringLoop() {
+        serviceScope.launch {
+            val app = application as ScreenTimeApplication
+            val repository = app.repository
+            val settings = app.settings
+
+            while (isActive && isMonitoring) {
+                try {
+                    if (settings.isMonitorServiceEnabled && UsageStatsHelper.hasUsageStatsPermission(this@AppMonitorService)) {
+                        val currentPackage = UsageStatsHelper.getCurrentForegroundPackage(this@AppMonitorService)
+
+                        if (currentPackage != null && currentPackage != packageName) {
+                            // Check individual tracked app
+                            val trackedApp = repository.getTrackedApp(currentPackage)
+                            val allGroups = if (settings.isGroupLimitsEnabled) repository.getAllGroupsList() else emptyList()
+                            val relevantGroup = allGroups.find { it.isEnabled && it.containsPackage(currentPackage) }
+
+                            if (trackedApp != null && trackedApp.isLimitEnabled) {
+                                val status = repository.evaluateAppStatus(trackedApp)
+
+                                if (status.isUnderEmergencyOverride) {
+                                    // Allowed under emergency override
+                                    if (settings.isFloatingTimerEnabled) {
+                                        val remainingMin = (status.overrideRemainingSeconds / 60).toInt()
+                                        FloatingTimerOverlayService.update(
+                                            context = this@AppMonitorService,
+                                            appName = trackedApp.appName,
+                                            packageName = trackedApp.packageName,
+                                            remainingMinutes = remainingMin,
+                                            isWarning = true
+                                        )
+                                    }
+                                } else if (status.entity.isLocked || status.isFrequencyBreached || status.isScreenTimeBreached) {
+                                    // Trigger dynamic lockdown
+                                    val reason = when {
+                                        status.isFrequencyBreached ->
+                                            "Exceeded ${trackedApp.maxOpenCount} opens in ${trackedApp.openWindowMinutes}m window"
+                                        status.isScreenTimeBreached ->
+                                            "Exceeded ${trackedApp.maxScreenTimeMinutes}m daily screen time"
+                                        else -> status.entity.lockReason.ifEmpty { "Screen time limit breached" }
+                                    }
+
+                                    // Dynamic lockdown duration rule:
+                                    // Frequency breach -> openWindowMinutes
+                                    // Screen time breach -> settings.autoLockDurationMinutes
+                                    val lockDuration = if (status.isFrequencyBreached) {
+                                        trackedApp.openWindowMinutes
+                                    } else {
+                                        settings.autoLockDurationMinutes
+                                    }
+
+                                    if (!trackedApp.isLocked) {
+                                        repository.lockApp(
+                                            packageName = trackedApp.packageName,
+                                            reason = reason,
+                                            durationMinutes = lockDuration
+                                        )
+                                    }
+
+                                    FloatingTimerOverlayService.hide(this@AppMonitorService)
+                                    triggerLockdownUi(trackedApp.packageName, trackedApp.appName, reason, trackedApp.lockUntilTimestamp)
+                                } else {
+                                    // Normal allowed usage
+                                    if (settings.isFloatingTimerEnabled && trackedApp.isScreenTimeLimitEnabled) {
+                                        val screenTimeMinutes = (status.usage.screenTimeMillisToday / (60 * 1000)).toInt()
+                                        val remainingMinutes = maxOf(0, trackedApp.maxScreenTimeMinutes - screenTimeMinutes)
+                                        FloatingTimerOverlayService.update(
+                                            context = this@AppMonitorService,
+                                            appName = trackedApp.appName,
+                                            packageName = trackedApp.packageName,
+                                            remainingMinutes = remainingMinutes,
+                                            isWarning = remainingMinutes <= 5
+                                        )
+                                    }
+                                }
+                            } else if (relevantGroup != null) {
+                                // Evaluate group status
+                                val groupStatus = repository.evaluateGroupStatus(relevantGroup)
+                                if (!groupStatus.isUnderEmergencyOverride &&
+                                    (relevantGroup.isLocked || groupStatus.isFrequencyBreached || groupStatus.isScreenTimeBreached || groupStatus.isScheduleActive)) {
+
+                                    val reason = when {
+                                        groupStatus.isScheduleActive -> "Active schedule restriction for group: ${relevantGroup.name}"
+                                        groupStatus.isFrequencyBreached -> "Group limit: Exceeded ${relevantGroup.maxOpenCount} opens"
+                                        groupStatus.isScreenTimeBreached -> "Group limit: Exceeded ${relevantGroup.maxScreenTimeMinutes}m screen time"
+                                        else -> relevantGroup.lockReason.ifEmpty { "Group limit reached" }
+                                    }
+
+                                    FloatingTimerOverlayService.hide(this@AppMonitorService)
+                                    triggerLockdownUi(currentPackage, relevantGroup.name, reason, relevantGroup.lockUntilTimestamp)
+                                }
+                            } else {
+                                // Not a monitored app
+                                FloatingTimerOverlayService.hide(this@AppMonitorService)
+                            }
+                        } else {
+                            // Home / launcher / self
+                            FloatingTimerOverlayService.hide(this@AppMonitorService)
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
+
                 delay(1500L) // Polling interval
             }
         }
     }
 
-    private fun stopMonitoring() {
-        monitorJob?.cancel()
-        monitorJob = null
-    }
-
-    private suspend fun checkForegroundAppLimits() {
-        val currentPackage = UsageStatsHelper.getCurrentForegroundPackage(this) ?: return
-        if (currentPackage == packageName) {
-            // Our app is in foreground, no action needed
-            lastObservedForegroundPackage = currentPackage
-            return
-        }
-
-        val trackedApp = repository.getTrackedApp(currentPackage) ?: run {
-            lastObservedForegroundPackage = currentPackage
-            return
-        }
-
-        if (!trackedApp.isLimitEnabled) {
-            lastObservedForegroundPackage = currentPackage
-            return
-        }
-
+    private fun triggerLockdownUi(
+        targetPackageName: String,
+        appName: String,
+        reason: String,
+        lockUntil: Long
+    ) {
         val now = System.currentTimeMillis()
-
-        // 1. Check if under emergency override
-        if (trackedApp.emergencyOverrideUntilTimestamp > now) {
-            // Override active, do not block
-            lastObservedForegroundPackage = currentPackage
+        if (now - lastNotificationTime < 1000L && lastHandledPackage == targetPackageName) {
             return
         }
+        lastNotificationTime = now
+        lastHandledPackage = targetPackageName
 
-        // 2. Check if already in active locked state
-        if (trackedApp.isLocked && (trackedApp.lockUntilTimestamp > now || trackedApp.lockUntilTimestamp == 0L)) {
-            triggerLockdown(trackedApp, trackedApp.lockReason.ifEmpty { "This app is in active lockdown." })
-            return
-        }
-
-        // 3. Evaluate real-time usage stats
-        val usage = UsageStatsHelper.getUsageForPackage(this, currentPackage, trackedApp.openWindowMinutes)
-        val screenTimeMinutes = (usage.screenTimeMillisToday / (60 * 1000)).toInt()
-
-        // Check Open Frequency Limit
-        if (usage.opensInWindow >= trackedApp.maxOpenCount) {
-            val reason = "Open frequency limit reached (${usage.opensInWindow}/${trackedApp.maxOpenCount} opens in ${trackedApp.openWindowMinutes} min)"
-            repository.lockApp(currentPackage, reason, settings.autoLockDurationMinutes)
-            triggerLockdown(trackedApp, reason)
-            return
-        }
-
-        // Check Screen Time Limit
-        if (screenTimeMinutes >= trackedApp.maxScreenTimeMinutes) {
-            val reason = "Daily screen time limit reached (${screenTimeMinutes}/${trackedApp.maxScreenTimeMinutes} min)"
-            repository.lockApp(currentPackage, reason, settings.autoLockDurationMinutes)
-            triggerLockdown(trackedApp, reason)
-            return
-        }
-
-        lastObservedForegroundPackage = currentPackage
-    }
-
-    private fun triggerLockdown(app: TrackedAppEntity, reason: String) {
-        val now = System.currentTimeMillis()
-        // Debounce triggers so we don't spam starts
-        if (now - lastLockTriggerTime < 2000L && lastObservedForegroundPackage == app.packageName) {
-            return
-        }
-        lastLockTriggerTime = now
-        lastObservedForegroundPackage = app.packageName
-
-        // Try launching overlay service if permission is available, or launch fullscreen lockdown activity
+        // If overlay permission granted, launch overlay
         if (UsageStatsHelper.hasOverlayPermission(this)) {
-            val overlayIntent = Intent(this, LockdownOverlayService::class.java).apply {
-                putExtra(LockdownOverlayService.EXTRA_PACKAGE_NAME, app.packageName)
-                putExtra(LockdownOverlayService.EXTRA_APP_NAME, app.appName)
-                putExtra(LockdownOverlayService.EXTRA_REASON, reason)
-                putExtra(LockdownOverlayService.EXTRA_LOCK_UNTIL, app.lockUntilTimestamp)
-            }
-            startService(overlayIntent)
+            LockdownOverlayService.show(this, targetPackageName, appName, reason, lockUntil)
         }
 
-        // Also launch LockdownActivity to ensure reliable full-screen capture
-        val activityIntent = Intent(this, LockdownActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(LockdownActivity.EXTRA_PACKAGE_NAME, app.packageName)
-            putExtra(LockdownActivity.EXTRA_APP_NAME, app.appName)
+        // Also launch LockdownActivity
+        val lockIntent = Intent(this, LockdownActivity::class.java).apply {
+            putExtra(LockdownActivity.EXTRA_PACKAGE_NAME, targetPackageName)
+            putExtra(LockdownActivity.EXTRA_APP_NAME, appName)
             putExtra(LockdownActivity.EXTRA_REASON, reason)
-            putExtra(LockdownActivity.EXTRA_LOCK_UNTIL, app.lockUntilTimestamp)
+            putExtra(LockdownActivity.EXTRA_LOCK_UNTIL, lockUntil)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        startActivity(activityIntent)
-    }
-
-    private fun buildForegroundNotification(): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        return NotificationCompat.Builder(this, ScreenTimeApplication.CHANNEL_MONITOR_SERVICE)
-            .setContentTitle("ScreenTime Lock Active")
-            .setContentText("Monitoring app open frequency and screen time limits")
-            .setSmallIcon(R.drawable.app_logo)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        try {
+            startActivity(lockIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopMonitoring()
+        isMonitoring = false
+        serviceJob.cancel()
+        FloatingTimerOverlayService.hide(this)
     }
 
     companion object {
-        const val NOTIFICATION_ID = 1001
-        const val ACTION_START_SERVICE = "com.example.action.START_MONITOR"
-        const val ACTION_STOP_SERVICE = "com.example.action.STOP_MONITOR"
-        const val ACTION_CHECK_NOW = "com.example.action.CHECK_NOW"
+        private const val NOTIFICATION_ID = 1001
 
         fun start(context: Context) {
-            val intent = Intent(context, AppMonitorService::class.java).apply {
-                action = ACTION_START_SERVICE
-            }
+            val intent = Intent(context, AppMonitorService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -201,17 +238,9 @@ class AppMonitorService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AppMonitorService::class.java).apply {
-                action = ACTION_STOP_SERVICE
-            }
-            context.startService(intent)
-        }
-
-        fun checkNow(context: Context) {
-            val intent = Intent(context, AppMonitorService::class.java).apply {
-                action = ACTION_CHECK_NOW
-            }
-            context.startService(intent)
+            val intent = Intent(context, AppMonitorService::class.java)
+            context.stopService(intent)
+            FloatingTimerOverlayService.hide(context)
         }
     }
 }

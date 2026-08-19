@@ -1,8 +1,6 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,25 +14,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,13 +37,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,7 +49,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.util.InstalledAppInfo
 import com.example.ui.components.AppIconView
-import com.example.ui.theme.SuccessGreen
 import com.example.ui.viewmodel.MainViewModel
 
 @Composable
@@ -72,29 +60,27 @@ fun AppPickerScreen(
     val installedApps by viewModel.installedApps.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoadingInstalledApps.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
     val trackedApps by viewModel.trackedApps.collectAsStateWithLifecycle()
 
     val trackedPackageSet = remember(trackedApps) {
         trackedApps.map { it.entity.packageName }.toSet()
     }
 
-    val categories = listOf("All", "Social", "Entertainment", "Productivity", "Games", "Other")
-
-    val filteredApps = remember(installedApps, searchQuery, selectedCategory) {
-        installedApps.filter { app ->
-            val matchesSearch = searchQuery.isBlank() ||
-                    app.appName.contains(searchQuery, ignoreCase = true) ||
-                    app.packageName.contains(searchQuery, ignoreCase = true)
-            val matchesCategory = selectedCategory == "All" || app.category.equals(selectedCategory, ignoreCase = true)
-            matchesSearch && matchesCategory
+    val filteredApps = remember(installedApps, searchQuery) {
+        if (searchQuery.isBlank()) {
+            installedApps
+        } else {
+            installedApps.filter { app ->
+                app.appName.contains(searchQuery, ignoreCase = true) ||
+                        app.packageName.contains(searchQuery, ignoreCase = true)
+            }
         }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         // Search & Refresh Row
         Row(
@@ -105,7 +91,7 @@ fun AppPickerScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Search installed applications...") },
+                placeholder = { Text("Search installed apps...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -143,40 +129,16 @@ fun AppPickerScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Category Filter Chips
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 4.dp)
-        ) {
-            items(categories) { category ->
-                val isSelected = selectedCategory == category
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { viewModel.setSelectedCategory(category) },
-                    label = { Text(category) },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    modifier = Modifier.testTag("category_chip_$category")
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Stats bar
+        // Stats summary bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "${filteredApps.size} apps available",
+                text = "${filteredApps.size} apps found",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -188,9 +150,9 @@ fun AppPickerScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // App List or Loading
+        // App List / Loading state
         if (isLoading) {
             Box(
                 modifier = Modifier
@@ -202,7 +164,7 @@ fun AppPickerScreen(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Loading installed applications...",
+                        text = "Scanning installed applications...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -216,7 +178,7 @@ fun AppPickerScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No applications match your search.",
+                    text = if (searchQuery.isNotEmpty()) "No applications found matching '$searchQuery'" else "No applications detected.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -253,9 +215,12 @@ private fun AppPickerItemCard(
     onConfigure: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isTracked) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+            containerColor = if (isTracked)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+            else
+                MaterialTheme.colorScheme.surface
         ),
         elevation = CardDefaults.cardElevation(if (isTracked) 1.dp else 0.dp),
         modifier = Modifier
@@ -272,7 +237,7 @@ private fun AppPickerItemCard(
                 packageName = appInfo.packageName,
                 appName = appInfo.appName,
                 category = appInfo.category,
-                size = 44.dp
+                size = 46.dp
             )
 
             Spacer(modifier = Modifier.width(12.dp))
@@ -294,19 +259,6 @@ private fun AppPickerItemCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Text(
-                        text = appInfo.category,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -322,7 +274,9 @@ private fun AppPickerItemCard(
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("configure_limits_${appInfo.packageName}")
                     ) {
-                        Text("Limits", style = MaterialTheme.typography.labelSmall)
+                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Rules", style = MaterialTheme.typography.labelSmall)
                     }
 
                     IconButton(
@@ -341,7 +295,7 @@ private fun AppPickerItemCard(
                 Button(
                     onClick = onAdd,
                     shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     modifier = Modifier.testTag("add_track_button_${appInfo.packageName}")
                 ) {
                     Icon(
@@ -350,7 +304,7 @@ private fun AppPickerItemCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Monitor", style = MaterialTheme.typography.labelMedium)
+                    Text("Track", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                 }
             }
         }

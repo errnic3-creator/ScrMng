@@ -1,16 +1,14 @@
 package com.example.ui.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class Screen(
@@ -19,29 +17,22 @@ sealed class Screen(
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector
 ) {
-    object Dashboard : Screen(
-        route = "dashboard",
-        title = "Limits",
-        selectedIcon = Icons.Filled.Lock,
-        unselectedIcon = Icons.Outlined.Lock
+    object Home : Screen(
+        route = "home",
+        title = "Home",
+        selectedIcon = Icons.Filled.Home,
+        unselectedIcon = Icons.Outlined.Home
     )
 
-    object AppPicker : Screen(
-        route = "app_picker",
-        title = "Apps",
-        selectedIcon = Icons.Filled.Apps,
-        unselectedIcon = Icons.Outlined.Apps
+    object Advanced : Screen(
+        route = "advanced",
+        title = "Advanced",
+        selectedIcon = Icons.Filled.Tune,
+        unselectedIcon = Icons.Outlined.Tune
     )
 
-    object Permissions : Screen(
-        route = "permissions",
-        title = "Permissions",
-        selectedIcon = Icons.Filled.Security,
-        unselectedIcon = Icons.Outlined.Security
-    )
-
-    object ActivityLogs : Screen(
-        route = "activity_logs",
+    object History : Screen(
+        route = "history",
         title = "History",
         selectedIcon = Icons.Filled.History,
         unselectedIcon = Icons.Outlined.History
@@ -54,12 +45,31 @@ sealed class Screen(
         unselectedIcon = Icons.Outlined.Settings
     )
 
+    // Standalone secondary screens
+    object AppPicker : Screen(
+        route = "app_picker",
+        title = "Select Apps",
+        selectedIcon = Icons.Filled.Home,
+        unselectedIcon = Icons.Outlined.Home
+    )
+
+    object Permissions : Screen(
+        route = "permissions",
+        title = "Setup Wizard",
+        selectedIcon = Icons.Filled.Settings,
+        unselectedIcon = Icons.Outlined.Settings
+    )
+
     object AppDetail : Screen(
         route = "app_detail/{packageName}",
-        title = "App Limit Details",
-        selectedIcon = Icons.Filled.Lock,
-        unselectedIcon = Icons.Outlined.Lock
+        title = "Limit Configuration",
+        selectedIcon = Icons.Filled.Home,
+        unselectedIcon = Icons.Outlined.Home
     ) {
         fun createRoute(packageName: String) = "app_detail/$packageName"
+    }
+
+    companion object {
+        val bottomNavItems = listOf(Home, Advanced, History, Settings)
     }
 }

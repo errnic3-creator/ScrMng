@@ -9,16 +9,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Android
-import androidx.compose.material.icons.filled.Games
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.People
-import androidx.compose.material.icons.filled.Work
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -36,7 +27,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun AppIconView(
     packageName: String,
-    appName: String,
+    appName: String = "",
     category: String = "Other",
     size: Dp = 48.dp,
     modifier: Modifier = Modifier
@@ -72,7 +63,8 @@ fun AppIconView(
                 .background(bgColor),
             contentAlignment = Alignment.Center
         ) {
-            val initial = appName.firstOrNull()?.uppercaseChar()?.toString() ?: "A"
+            val displayName = if (appName.isNotBlank()) appName else packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+            val initial = displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "A"
             Text(
                 text = initial,
                 color = Color.White,

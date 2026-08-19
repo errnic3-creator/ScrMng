@@ -1,6 +1,6 @@
 {
-  "name": "ScreenTime Lock",
-  "description": "Limit screen time and app open frequency with usage stats tracking, active lockdown overlays, and emergency PIN override.",
+  "name": "ScrMngr",
+  "description": "Smart screen time and app open frequency manager with window-based limits, lockdown overlays, app grouping, and emergency override.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -27,7 +27,18 @@ data class RealtimeAppUsage(
     val opensInWindow: Int,
     val screenTimeMillisToday: Long,
     val screenTimeMillisInWindow: Long,
-    val lastForegroundTimestamp: Long
+    val lastForegroundTimestamp: Long,
+    val windowStartTimestamp: Long = 0L,
+    val windowResetRemainingSeconds: Long = 0L
+)
+
+data class GroupUsageSummary(
+    val groupId: Long,
+    val groupName: String,
+    val combinedOpensInWindow: Int,
+    val combinedScreenTimeMillisToday: Long,
+    val activeForegroundPackage: String? = null,
+    val windowResetRemainingSeconds: Long = 0L
 )
 
 object UsageStatsHelper {
@@ -70,6 +81,21 @@ object UsageStatsHelper {
         }
     }
 
+    fun getAppDetailsSettingsIntent(context: Context): Intent {
+        return Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}")
+        ).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+    }
+
+    fun getAccessibilitySettingsIntent(): Intent {
+        return Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+    }
+
     fun getInstalledLaunchableApps(context: Context): List<InstalledAppInfo> {
         val pm = context.packageManager
         val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
@@ -89,7 +115,6 @@ object UsageStatsHelper {
             val appName = resolveInfo.loadLabel(pm).toString()
             val icon = resolveInfo.loadIcon(pm)
             val isSystem = (resolveInfo.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-
             val category = categorizeApp(pkg, appName)
 
             appList.add(
@@ -106,31 +131,33 @@ object UsageStatsHelper {
         return appList.sortedBy { it.appName.lowercase() }
     }
 
-    private fun categorizeApp(packageName: String, appName: String): String {
+    fun categorizeApp(packageName: String, appName: String): String {
         val lowerPkg = packageName.lowercase()
         val lowerName = appName.lowercase()
 
         return when {
             lowerPkg.contains("instagram") || lowerPkg.contains("twitter") || lowerPkg.contains("x.corp") ||
-            lowerPkg.contains("tiktok") || lowerPkg.contains("facebook") || lowerPkg.contains("reddit") ||
-            lowerPkg.contains("snapchat") || lowerPkg.contains("social") || lowerName.contains("social") -> "Social"
+            lowerPkg.contains("tiktok") || lowerPkg.contains("musically") || lowerPkg.contains("facebook") ||
+            lowerPkg.contains("reddit") || lowerPkg.contains("snapchat") || lowerPkg.contains("threads") ||
+            lowerPkg.contains("social") || lowerName.contains("social") -> "Social"
 
             lowerPkg.contains("youtube") || lowerPkg.contains("netflix") || lowerPkg.contains("spotify") ||
             lowerPkg.contains("twitch") || lowerPkg.contains("media") || lowerPkg.contains("video") ||
-            lowerPkg.contains("music") -> "Entertainment"
+            lowerPkg.contains("music") || lowerPkg.contains("hulu") || lowerPkg.contains("disney") -> "Entertainment"
 
-            lowerPkg.contains("game") || lowerPkg.contains("play") || lowerName.contains("game") -> "Games"
+            lowerPkg.contains("game") || lowerPkg.contains("play") || lowerName.contains("game") ||
+            lowerPkg.contains("roblox") || lowerPkg.contains("supercell") || lowerPkg.contains("unity") -> "Games"
 
             lowerPkg.contains("mail") || lowerPkg.contains("slack") || lowerPkg.contains("notion") ||
             lowerPkg.contains("docs") || lowerPkg.contains("office") || lowerPkg.contains("trello") ||
-            lowerPkg.contains("chrome") || lowerPkg.contains("browser") -> "Productivity"
+            lowerPkg.contains("chrome") || lowerPkg.contains("browser") || lowerPkg.contains("keep") -> "Productivity"
 
             else -> "Other"
         }
     }
 
     /**
-     * Queries UsageEvents to determine the current active foreground package and event counts.
+     * Queries UsageEvents to determine the current active foreground package.
      */
     fun getCurrentForegroundPackage(context: Context): String? {
         if (!hasUsageStatsPermission(context)) return null
@@ -159,7 +186,9 @@ object UsageStatsHelper {
     }
 
     /**
-     * Calculates open frequency in the past `windowMinutes` and screen time today for a package.
+     * Calculates fixed-window reset open frequency and today's screen time.
+     * Fixed-window reset: interval = [floor(now / windowMillis) * windowMillis, intervalStart + windowMillis)
+     * Resets automatically to 0 when the window boundary is crossed.
      */
     fun getUsageForPackage(
         context: Context,
@@ -180,7 +209,10 @@ object UsageStatsHelper {
             ?: return RealtimeAppUsage(packageName, 0, 0L, 0L, 0L)
 
         val now = System.currentTimeMillis()
-        val windowStart = now - (windowMinutes * 60 * 1000L)
+        val windowMillis = maxOf(1, windowMinutes) * 60 * 1000L
+        val windowStart = (now / windowMillis) * windowMillis
+        val windowEnd = windowStart + windowMillis
+        val windowResetRemaining = maxOf(0L, (windowEnd - now) / 1000L)
 
         // Today start (midnight)
         val calendar = Calendar.getInstance().apply {
@@ -194,7 +226,6 @@ object UsageStatsHelper {
         var opensInWindow = 0
         var lastForeground = 0L
 
-        // Query events from earliest start
         val queryStart = minOf(windowStart, todayStart)
         val usageEvents = usm.queryEvents(queryStart, now)
         val event = UsageEvents.Event()
@@ -230,7 +261,6 @@ object UsageStatsHelper {
             }
         }
 
-        // If currently in foreground
         currentForegroundStart?.let { start ->
             val duration = now - start
             if (start >= todayStart) {
@@ -241,7 +271,6 @@ object UsageStatsHelper {
             }
         }
 
-        // Fallback or augment with queryUsageStats for daily total if events are truncated
         if (totalTodayScreenTime == 0L) {
             val statsList = usm.queryUsageStats(
                 UsageStatsManager.INTERVAL_DAILY,
@@ -259,7 +288,89 @@ object UsageStatsHelper {
             opensInWindow = opensInWindow,
             screenTimeMillisToday = totalTodayScreenTime,
             screenTimeMillisInWindow = totalWindowScreenTime,
-            lastForegroundTimestamp = lastForeground
+            lastForegroundTimestamp = lastForeground,
+            windowStartTimestamp = windowStart,
+            windowResetRemainingSeconds = windowResetRemaining
+        )
+    }
+
+    /**
+     * Calculates combined usage for a list of packages in an App Group.
+     */
+    fun getGroupUsage(
+        context: Context,
+        groupId: Long,
+        groupName: String,
+        packageList: List<String>,
+        windowMinutes: Int
+    ): GroupUsageSummary {
+        if (!hasUsageStatsPermission(context) || packageList.isEmpty()) {
+            return GroupUsageSummary(groupId, groupName, 0, 0L, null, 0L)
+        }
+
+        val packageSet = packageList.toSet()
+        val now = System.currentTimeMillis()
+        val windowMillis = maxOf(1, windowMinutes) * 60 * 1000L
+        val windowStart = (now / windowMillis) * windowMillis
+        val windowEnd = windowStart + windowMillis
+        val windowResetRemaining = maxOf(0L, (windowEnd - now) / 1000L)
+
+        val calendar = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val todayStart = calendar.timeInMillis
+
+        var combinedOpens = 0
+        var combinedScreenTime = 0L
+        var activePkg: String? = null
+
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            ?: return GroupUsageSummary(groupId, groupName, 0, 0L, null, 0L)
+
+        val queryStart = minOf(windowStart, todayStart)
+        val usageEvents = usm.queryEvents(queryStart, now)
+        val event = UsageEvents.Event()
+
+        val foregroundStarts = mutableMapOf<String, Long>()
+
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(event)
+            if (packageSet.contains(event.packageName)) {
+                when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                        if (event.timeStamp >= windowStart) {
+                            combinedOpens++
+                        }
+                        foregroundStarts[event.packageName] = event.timeStamp
+                    }
+                    UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                        foregroundStarts.remove(event.packageName)?.let { start ->
+                            if (start >= todayStart) {
+                                combinedScreenTime += (event.timeStamp - start)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        foregroundStarts.forEach { (pkg, start) ->
+            if (start >= todayStart) {
+                combinedScreenTime += (now - start)
+            }
+            activePkg = pkg
+        }
+
+        return GroupUsageSummary(
+            groupId = groupId,
+            groupName = groupName,
+            combinedOpensInWindow = combinedOpens,
+            combinedScreenTimeMillisToday = combinedScreenTime,
+            activeForegroundPackage = activePkg,
+            windowResetRemainingSeconds = windowResetRemaining
         )
     }
 }

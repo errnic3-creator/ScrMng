@@ -29,6 +29,7 @@ class ScreenTimeApplication : Application() {
         repository = AppLimitRepository(
             context = this,
             trackedAppDao = database.trackedAppDao(),
+            appGroupDao = database.appGroupDao(),
             usageLogDao = database.usageLogDao(),
             settings = settings
         )
@@ -42,7 +43,7 @@ class ScreenTimeApplication : Application() {
 
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_SERVICE,
-                "ScreenTime Monitoring Service",
+                "ScrMngr Monitoring Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Shows active background app limit tracking status"

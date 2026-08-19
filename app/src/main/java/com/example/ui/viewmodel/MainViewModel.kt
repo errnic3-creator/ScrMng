@@ -5,12 +5,15 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ScreenTimeApplication
+import com.example.data.model.AppGroupEntity
 import com.example.data.model.TrackedAppEntity
 import com.example.data.model.UsageLogEntity
+import com.example.data.repository.AppGroupWithUsage
 import com.example.data.repository.TrackedAppWithUsage
 import com.example.data.util.InstalledAppInfo
 import com.example.data.util.UsageStatsHelper
 import com.example.service.AppMonitorService
+import com.example.service.FloatingTimerOverlayService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,11 +50,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isServiceRunning = MutableStateFlow(settings.isMonitorServiceEnabled)
     val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
 
+    private val _selectedTheme = MutableStateFlow(settings.selectedTheme)
+    val selectedTheme: StateFlow<String> = _selectedTheme.asStateFlow()
+
+    private val _isFloatingTimerEnabled = MutableStateFlow(settings.isFloatingTimerEnabled)
+    val isFloatingTimerEnabled: StateFlow<Boolean> = _isFloatingTimerEnabled.asStateFlow()
+
+    private val _isGroupLimitsEnabled = MutableStateFlow(settings.isGroupLimitsEnabled)
+    val isGroupLimitsEnabled: StateFlow<Boolean> = _isGroupLimitsEnabled.asStateFlow()
+
+    private val _hasCompletedOnboarding = MutableStateFlow(settings.hasCompletedOnboarding)
+    val hasCompletedOnboarding: StateFlow<Boolean> = _hasCompletedOnboarding.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
-
-    private val _selectedCategory = MutableStateFlow("All")
-    val selectedCategory: StateFlow<String> = _selectedCategory.asStateFlow()
 
     private val _selectedAppForEdit = MutableStateFlow<TrackedAppEntity?>(null)
     val selectedAppForEdit: StateFlow<TrackedAppEntity?> = _selectedAppForEdit.asStateFlow()
@@ -67,6 +79,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _ticker
     ) { apps, _ ->
         apps.map { repository.evaluateAppStatus(it) }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val appGroups: StateFlow<List<AppGroupWithUsage>> = combine(
+        repository.allGroups,
+        _ticker
+    ) { groups, _ ->
+        groups.map { repository.evaluateGroupStatus(it) }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -119,19 +142,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _searchQuery.value = query
     }
 
-    fun setSelectedCategory(category: String) {
-        _selectedCategory.value = category
-    }
-
     fun setSelectedAppForEdit(app: TrackedAppEntity?) {
         _selectedAppForEdit.value = app
+    }
+
+    fun completeOnboarding() {
+        settings.hasCompletedOnboarding = true
+        _hasCompletedOnboarding.value = true
+        if (settings.isMonitorServiceEnabled) {
+            AppMonitorService.start(context)
+        }
+    }
+
+    fun resetOnboarding() {
+        settings.hasCompletedOnboarding = false
+        _hasCompletedOnboarding.value = false
+    }
+
+    fun setTheme(themeKey: String) {
+        settings.selectedTheme = themeKey
+        _selectedTheme.value = themeKey
+        showFeedback("Theme updated to ${themeKey.replaceFirstChar { it.uppercase() }}")
+    }
+
+    fun setFloatingTimerEnabled(enabled: Boolean) {
+        settings.isFloatingTimerEnabled = enabled
+        _isFloatingTimerEnabled.value = enabled
+        if (!enabled) {
+            FloatingTimerOverlayService.hide(context)
+        }
+        showFeedback("Floating screen timer ${if (enabled) "enabled" else "disabled"}")
+    }
+
+    fun setGroupLimitsEnabled(enabled: Boolean) {
+        settings.isGroupLimitsEnabled = enabled
+        _isGroupLimitsEnabled.value = enabled
+        showFeedback("Group limit schedules ${if (enabled) "enabled" else "disabled"}")
     }
 
     fun addTrackedApp(
         appInfo: InstalledAppInfo,
         maxOpenCount: Int = 3,
         openWindowMinutes: Int = 30,
-        maxScreenTimeMinutes: Int = 45
+        isFrequencyLimitEnabled: Boolean = true,
+        maxScreenTimeMinutes: Int = 45,
+        isScreenTimeLimitEnabled: Boolean = true
     ) {
         viewModelScope.launch {
             val entity = TrackedAppEntity(
@@ -139,11 +194,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appName = appInfo.appName,
                 maxOpenCount = maxOpenCount,
                 openWindowMinutes = openWindowMinutes,
+                isFrequencyLimitEnabled = isFrequencyLimitEnabled,
                 maxScreenTimeMinutes = maxScreenTimeMinutes,
+                isScreenTimeLimitEnabled = isScreenTimeLimitEnabled,
                 category = appInfo.category
             )
             repository.addTrackedApp(entity)
-            showFeedback("Added ${appInfo.appName} to monitoring list")
+            showFeedback("Added ${appInfo.appName} to tracking list")
         }
     }
 
@@ -152,7 +209,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appName: String,
         maxOpenCount: Int,
         openWindowMinutes: Int,
+        isFrequencyLimitEnabled: Boolean,
         maxScreenTimeMinutes: Int,
+        isScreenTimeLimitEnabled: Boolean,
         isLimitEnabled: Boolean,
         category: String
     ) {
@@ -161,7 +220,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val updated = existing?.copy(
                 maxOpenCount = maxOpenCount,
                 openWindowMinutes = openWindowMinutes,
+                isFrequencyLimitEnabled = isFrequencyLimitEnabled,
                 maxScreenTimeMinutes = maxScreenTimeMinutes,
+                isScreenTimeLimitEnabled = isScreenTimeLimitEnabled,
                 isLimitEnabled = isLimitEnabled,
                 category = category
             ) ?: TrackedAppEntity(
@@ -169,7 +230,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appName = appName,
                 maxOpenCount = maxOpenCount,
                 openWindowMinutes = openWindowMinutes,
+                isFrequencyLimitEnabled = isFrequencyLimitEnabled,
                 maxScreenTimeMinutes = maxScreenTimeMinutes,
+                isScreenTimeLimitEnabled = isScreenTimeLimitEnabled,
                 isLimitEnabled = isLimitEnabled,
                 category = category
             )
@@ -178,10 +241,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleAppLimit(packageName: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val existing = repository.getTrackedApp(packageName) ?: return@launch
+            val updated = existing.copy(isLimitEnabled = enabled)
+            repository.updateTrackedApp(updated)
+            showFeedback("${existing.appName} monitoring ${if (enabled) "enabled" else "paused"}")
+        }
+    }
+
+    fun toggleFrequencyLimit(packageName: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val existing = repository.getTrackedApp(packageName) ?: return@launch
+            val updated = existing.copy(isFrequencyLimitEnabled = enabled)
+            repository.updateTrackedApp(updated)
+            showFeedback("${existing.appName} launch frequency limit ${if (enabled) "enabled" else "disabled"}")
+        }
+    }
+
+    fun toggleScreenTimeLimit(packageName: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val existing = repository.getTrackedApp(packageName) ?: return@launch
+            val updated = existing.copy(isScreenTimeLimitEnabled = enabled)
+            repository.updateTrackedApp(updated)
+            showFeedback("${existing.appName} screen time limit ${if (enabled) "enabled" else "disabled"}")
+        }
+    }
+
     fun removeTrackedApp(packageName: String) {
         viewModelScope.launch {
             repository.removeTrackedApp(packageName)
             showFeedback("Removed app from tracking")
+        }
+    }
+
+    // App Group Operations
+    fun addAppGroup(group: AppGroupEntity) {
+        viewModelScope.launch {
+            repository.addAppGroup(group)
+            showFeedback("Created group: ${group.name}")
+        }
+    }
+
+    fun updateAppGroup(group: AppGroupEntity) {
+        viewModelScope.launch {
+            repository.updateAppGroup(group)
+            showFeedback("Updated group: ${group.name}")
+        }
+    }
+
+    fun deleteAppGroup(group: AppGroupEntity) {
+        viewModelScope.launch {
+            repository.deleteAppGroup(group)
+            showFeedback("Deleted group: ${group.name}")
+        }
+    }
+
+    fun toggleGroupEnabled(group: AppGroupEntity, enabled: Boolean) {
+        viewModelScope.launch {
+            val updated = group.copy(isEnabled = enabled)
+            repository.updateAppGroup(updated)
+            showFeedback("${group.name} ${if (enabled) "activated" else "disabled"}")
         }
     }
 
@@ -196,9 +316,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun grantEmergencyOverride(packageName: String, durationMinutes: Int = settings.emergencyOverrideDurationMinutes): Boolean {
-        var success = false
         viewModelScope.launch {
-            success = repository.grantEmergencyOverride(packageName, durationMinutes)
+            repository.grantEmergencyOverride(packageName, durationMinutes)
             _ticker.value = System.currentTimeMillis()
             showFeedback("Emergency override granted for $durationMinutes min")
         }
@@ -236,7 +355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateSettings(overrideMin: Int, autoLockMin: Int) {
         settings.emergencyOverrideDurationMinutes = overrideMin
         settings.autoLockDurationMinutes = autoLockMin
-        showFeedback("Preferences updated")
+        showFeedback("Security preferences updated")
     }
 
     fun getOverrideDuration(): Int = settings.emergencyOverrideDurationMinutes
@@ -246,6 +365,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.clearLogs()
             showFeedback("Activity logs cleared")
+        }
+    }
+
+    fun wipeAllData() {
+        viewModelScope.launch {
+            repository.wipeAllData()
+            _hasMasterPin.value = false
+            _isServiceRunning.value = true
+            _isFloatingTimerEnabled.value = false
+            _isGroupLimitsEnabled.value = false
+            _selectedTheme.value = "indigo"
+            _hasCompletedOnboarding.value = false
+            loadInstalledApps()
+            showFeedback("App data wiped and restored to default")
         }
     }
 
@@ -259,6 +392,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _ticker.value = System.currentTimeMillis()
             showFeedback("Simulated lockdown triggered for ${app.appName}")
         }
+    }
+
+    fun refreshUsage() {
+        _ticker.value = System.currentTimeMillis()
     }
 
     private fun showFeedback(message: String) {
