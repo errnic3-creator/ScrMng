@@ -5,7 +5,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,10 +51,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -87,6 +95,18 @@ class LockdownActivity : ComponentActivity() {
                     initialLockUntil = lockUntil,
                     onEmergencyOverrideGranted = {
                         LockdownOverlayService.dismiss(this)
+                        // Launch target app so user transitions smoothly back to their application
+                        try {
+                            if (packageName.isNotEmpty()) {
+                                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                                if (launchIntent != null) {
+                                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                                    startActivity(launchIntent)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                         finishAndRemoveTask()
                     },
                     onExitToHome = {
@@ -100,19 +120,6 @@ class LockdownActivity : ComponentActivity() {
                     }
                 )
             }
-        }
-    }
-
-    override fun onStop() {
-        super.onStop()
-        // Automatically remove from recents stack when navigation transitions away
-        finishAndRemoveTask()
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus && !isFinishing) {
-            finishAndRemoveTask()
         }
     }
 
@@ -183,6 +190,24 @@ fun LockdownScreen(
     val minutes = (remainingSeconds % 3600) / 60
     val seconds = remainingSeconds % 60
 
+    // Urgency visual indicator: pulse container on passing minute boundary (every 60 seconds)
+    val isMinuteBoundary = (seconds in 0L..1L) && remainingSeconds > 0L
+    val pulseAlpha by animateFloatAsState(
+        targetValue = if (isMinuteBoundary) 0.35f else 0.10f,
+        animationSpec = tween(durationMillis = 500),
+        label = "minute_pulse_alpha"
+    )
+    val pulseScale by animateFloatAsState(
+        targetValue = if (isMinuteBoundary) 1.03f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "minute_pulse_scale"
+    )
+    val pulseBorderColor by animateColorAsState(
+        targetValue = if (isMinuteBoundary) LockdownRed.copy(alpha = 0.8f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+        animationSpec = tween(durationMillis = 500),
+        label = "minute_pulse_border"
+    )
+
     val primaryColor = MaterialTheme.colorScheme.primary
     val backgroundColor = MaterialTheme.colorScheme.background
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -226,7 +251,7 @@ fun LockdownScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             Text(
                 text = "APP IN LOCKDOWN",
@@ -236,17 +261,17 @@ fun LockdownScreen(
                 color = LockdownRed
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = "Screen Time Limit Breached",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // App details card
             Card(
@@ -257,14 +282,14 @@ fun LockdownScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(18.dp),
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         AppIconView(
                             packageName = packageName,
                             appName = appName,
-                            size = 40.dp
+                            size = 38.dp
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
@@ -275,7 +300,7 @@ fun LockdownScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -293,38 +318,63 @@ fun LockdownScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // Countdown Timer
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "LOCKDOWN TIMER",
-                    style = MaterialTheme.typography.labelSmall,
-                    letterSpacing = 1.5.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                )
+            // Countdown Timer Card with Prominent Typography and Pulsing Container
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = LockdownRed.copy(alpha = pulseAlpha),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .scale(pulseScale)
+                    .border(1.5.dp, pulseBorderColor, RoundedCornerShape(24.dp))
+                    .testTag("lockdown_timer_container")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp, horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "LOCKDOWN TIMER",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                Text(
-                    text = if (hours > 0) {
+                    // Prominent typography & Conditional HH:MM:SS vs MM:SS format
+                    val timerDisplay = if (remainingSeconds >= 3600L || hours > 0) {
                         "%02d:%02d:%02d".format(hours, minutes, seconds)
                     } else {
                         "%02d:%02d".format(minutes, seconds)
-                    },
-                    style = MaterialTheme.typography.displayMedium,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                    }
 
-                Text(
-                    text = "App will unlock automatically when timer expires",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                )
+                    Text(
+                        text = timerDisplay,
+                        fontSize = if (timerDisplay.length > 5) 46.sp else 56.sp,
+                        lineHeight = if (timerDisplay.length > 5) 50.sp else 60.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.testTag("lockdown_countdown_text")
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "App unlocks automatically when timer expires",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(26.dp))
 
             // Action Buttons
             Button(
@@ -384,6 +434,7 @@ fun LockdownScreen(
             onVerify = { pin -> repository.verifyMasterPin(pin) },
             onSuccess = {
                 scope.launch {
+                    // Write override state to DB BEFORE dismissing screen
                     repository.grantEmergencyOverride(packageName, settings.emergencyOverrideDurationMinutes)
                     showPinDialog = false
                     onEmergencyOverrideGranted()

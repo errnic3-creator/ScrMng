@@ -167,17 +167,47 @@ class AppLimitRepository(
     }
 
     suspend fun lockApp(packageName: String, reason: String, durationMinutes: Int) {
-        val existing = trackedAppDao.getTrackedApp(packageName) ?: return
         val lockUntil = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
-        trackedAppDao.updateLockStatus(
-            packageName = packageName,
-            isLocked = true,
-            reason = reason,
-            lockUntil = lockUntil
-        )
+        lockAppUntil(packageName, reason, lockUntil)
+    }
+
+    suspend fun lockAppUntil(packageName: String, reason: String, lockUntilTimestamp: Long) {
+        val existing = trackedAppDao.getTrackedApp(packageName)
+        val now = System.currentTimeMillis()
+        if (existing == null) {
+            val appLabel = try {
+                val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
+                context.packageManager.getApplicationLabel(appInfo).toString()
+            } catch (e: Exception) {
+                packageName.substringAfterLast('.')
+            }
+            val newApp = TrackedAppEntity(
+                packageName = packageName,
+                appName = appLabel,
+                isLocked = true,
+                lockReason = reason,
+                lockUntilTimestamp = lockUntilTimestamp,
+                addedTimestamp = now
+            )
+            trackedAppDao.insert(newApp)
+        } else {
+            // Preserve existing lockUntil if already locked and not expired
+            val targetLockUntil = if (existing.isLocked && existing.lockUntilTimestamp > now) {
+                existing.lockUntilTimestamp
+            } else {
+                lockUntilTimestamp
+            }
+            trackedAppDao.updateLockStatus(
+                packageName = packageName,
+                isLocked = true,
+                reason = reason,
+                lockUntil = targetLockUntil
+            )
+        }
+        val durationMinutes = maxOf(1, ((lockUntilTimestamp - now) / 60000L).toInt())
         logEvent(
             packageName = packageName,
-            appName = existing.appName,
+            appName = existing?.appName ?: packageName,
             eventType = "LOCKDOWN_TRIGGERED",
             details = "Locked for $durationMinutes min. Reason: $reason"
         )
@@ -195,9 +225,26 @@ class AppLimitRepository(
     }
 
     suspend fun grantEmergencyOverride(packageName: String, durationMinutes: Int = settings.emergencyOverrideDurationMinutes): Boolean {
-        val existing = trackedAppDao.getTrackedApp(packageName) ?: return false
+        var existing = trackedAppDao.getTrackedApp(packageName)
         val overrideUntil = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
-        trackedAppDao.grantEmergencyOverride(packageName, overrideUntil)
+        if (existing == null) {
+            val appLabel = try {
+                val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
+                context.packageManager.getApplicationLabel(appInfo).toString()
+            } catch (e: Exception) {
+                packageName.substringAfterLast('.')
+            }
+            existing = TrackedAppEntity(
+                packageName = packageName,
+                appName = appLabel,
+                addedTimestamp = System.currentTimeMillis(),
+                emergencyOverrideUntilTimestamp = overrideUntil,
+                isLocked = false
+            )
+            trackedAppDao.insert(existing)
+        } else {
+            trackedAppDao.grantEmergencyOverride(packageName, overrideUntil)
+        }
         logEvent(
             packageName = packageName,
             appName = existing.appName,
@@ -250,10 +297,11 @@ class AppLimitRepository(
     /**
      * Checks an individual app's live usage against configured limits.
      * Uses track-on-add baseline and fixed-interval window-based reset logic.
+     * Freezes launch increments on limit breach to prevent count overflow.
      */
     fun evaluateAppStatus(app: TrackedAppEntity): TrackedAppWithUsage {
         val now = System.currentTimeMillis()
-        val usage = UsageStatsHelper.getUsageForPackage(
+        val rawUsage = UsageStatsHelper.getUsageForPackage(
             context = context,
             packageName = app.packageName,
             windowMinutes = app.openWindowMinutes,
@@ -273,12 +321,22 @@ class AppLimitRepository(
         // Independent Limit checks
         val isFrequencyBreached = app.isLimitEnabled &&
                 app.isFrequencyLimitEnabled &&
-                (usage.opensInWindow >= app.maxOpenCount)
+                (rawUsage.opensInWindow >= app.maxOpenCount)
 
-        val screenTimeMinutesToday = (usage.screenTimeMillisToday / (60 * 1000)).toInt()
+        val screenTimeMinutesToday = (rawUsage.screenTimeMillisToday / (60 * 1000)).toInt()
         val isScreenTimeBreached = app.isLimitEnabled &&
                 app.isScreenTimeLimitEnabled &&
                 (screenTimeMinutesToday >= app.maxScreenTimeMinutes)
+
+        // Freeze launch count increments once limit is reached or app is locked:
+        // Do NOT count launch attempts that redirect to Lockdown UI (prevents 4/3, 10/3 overflow)
+        val clampedOpens = if (app.isFrequencyLimitEnabled && (isFrequencyBreached || isLockedByTimer)) {
+            minOf(rawUsage.opensInWindow, app.maxOpenCount)
+        } else {
+            rawUsage.opensInWindow
+        }
+
+        val usage = rawUsage.copy(opensInWindow = clampedOpens)
 
         return TrackedAppWithUsage(
             entity = app,
@@ -293,9 +351,12 @@ class AppLimitRepository(
 
     /**
      * Checks an app group's individual member apps (NO POOLED LIMITS).
-     * Rules configured at the group level apply individually to each member app.
+     * Synchronizes each member app with its actual tracked state from the database.
      */
-    fun evaluateGroupStatus(group: AppGroupEntity): AppGroupWithUsage {
+    fun evaluateGroupStatus(
+        group: AppGroupEntity,
+        trackedMap: Map<String, TrackedAppEntity> = emptyMap()
+    ): AppGroupWithUsage {
         val now = System.currentTimeMillis()
         val packageList = group.getPackageList()
         val isTodayActive = group.isTodayActive() && group.isEnabled
@@ -304,38 +365,58 @@ class AppLimitRepository(
         val memberUsages = mutableListOf<TrackedAppWithUsage>()
 
         for (pkg in packageList) {
-            val appLabel = try {
+            val existing = trackedMap[pkg]
+            val appLabel = existing?.appName ?: try {
                 val info = pm.getApplicationInfo(pkg, 0)
                 pm.getApplicationLabel(info).toString()
             } catch (e: Exception) {
                 pkg.substringAfterLast('.')
             }
 
-            val appEntity = TrackedAppEntity(
-                packageName = pkg,
-                appName = appLabel,
-                maxOpenCount = group.maxOpenCount,
-                openWindowMinutes = group.openWindowMinutes,
-                isFrequencyLimitEnabled = group.isFrequencyLimitEnabled && isTodayActive,
-                maxScreenTimeMinutes = group.maxScreenTimeMinutes,
-                isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled && isTodayActive,
-                isLimitEnabled = group.isEnabled && isTodayActive,
-                category = group.name
-            )
+            // Sync with real TrackedAppEntity if present to preserve active locks & overrides
+            val appEntity = if (existing != null) {
+                existing.copy(
+                    appName = appLabel,
+                    maxOpenCount = group.maxOpenCount,
+                    openWindowMinutes = group.openWindowMinutes,
+                    isFrequencyLimitEnabled = group.isFrequencyLimitEnabled && isTodayActive,
+                    maxScreenTimeMinutes = group.maxScreenTimeMinutes,
+                    isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled && isTodayActive,
+                    isLimitEnabled = (group.isEnabled && isTodayActive) || existing.isLimitEnabled,
+                    category = group.name
+                )
+            } else {
+                TrackedAppEntity(
+                    packageName = pkg,
+                    appName = appLabel,
+                    maxOpenCount = group.maxOpenCount,
+                    openWindowMinutes = group.openWindowMinutes,
+                    isFrequencyLimitEnabled = group.isFrequencyLimitEnabled && isTodayActive,
+                    maxScreenTimeMinutes = group.maxScreenTimeMinutes,
+                    isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled && isTodayActive,
+                    isLimitEnabled = group.isEnabled && isTodayActive,
+                    category = group.name,
+                    addedTimestamp = 0L
+                )
+            }
             val usage = evaluateAppStatus(appEntity)
             memberUsages.add(usage)
         }
 
         val isAnyMemberLocked = memberUsages.any { it.isFrequencyBreached || it.isScreenTimeBreached || it.entity.isLocked }
 
-        val isUnderOverride = group.emergencyOverrideUntilTimestamp > now
-        val overrideRemainingSeconds = if (isUnderOverride) {
+        val isUnderOverride = group.emergencyOverrideUntilTimestamp > now || memberUsages.any { it.isUnderEmergencyOverride }
+        val overrideRemainingSeconds = if (group.emergencyOverrideUntilTimestamp > now) {
             (group.emergencyOverrideUntilTimestamp - now) / 1000L
-        } else 0L
+        } else {
+            memberUsages.maxOfOrNull { it.overrideRemainingSeconds } ?: 0L
+        }
 
         val lockRemainingSeconds = if (group.isLocked && group.lockUntilTimestamp > now) {
             (group.lockUntilTimestamp - now) / 1000L
-        } else 0L
+        } else {
+            memberUsages.maxOfOrNull { it.lockRemainingSeconds } ?: 0L
+        }
 
         return AppGroupWithUsage(
             group = group,

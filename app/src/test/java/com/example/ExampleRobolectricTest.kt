@@ -32,4 +32,19 @@ class ExampleRobolectricTest {
     assertFalse(SecurityHelper.verifyPin("9999", hash, salt))
     assertFalse(SecurityHelper.verifyPin("123", hash, salt))
   }
+
+  @Test
+  fun `app group active days check correctly handles all days`() {
+    val group = com.example.data.model.AppGroupEntity(
+      name = "Doomscroll",
+      packageNamesCsv = "com.instagram.android,com.zhiliaoapp.musically",
+      daysOfWeekCsv = "1,2,3,4,5,6,7",
+      isEnabled = true
+    )
+    val packageList = group.getPackageList()
+    assertEquals(2, packageList.size)
+    assertTrue(packageList.contains("com.instagram.android"))
+    assertTrue(packageList.contains("com.zhiliaoapp.musically"))
+    assertTrue(group.isTodayActive())
+  }
 }

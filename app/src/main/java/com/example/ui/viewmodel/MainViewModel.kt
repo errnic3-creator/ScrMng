@@ -87,9 +87,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val appGroups: StateFlow<List<AppGroupWithUsage>> = combine(
         repository.allGroups,
+        repository.allTrackedApps,
         _ticker
-    ) { groups, _ ->
-        groups.map { repository.evaluateGroupStatus(it) }
+    ) { groups, tracked, _ ->
+        val trackedMap = tracked.associateBy { it.packageName }
+        groups.map { repository.evaluateGroupStatus(it, trackedMap) }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),

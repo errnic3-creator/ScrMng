@@ -427,7 +427,21 @@ fun HomeGroupCard(
                                     )
                                 }
 
-                                if (isLocked) {
+                                if (memberApp.isUnderEmergencyOverride) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = SuccessGreen.copy(alpha = 0.2f),
+                                        modifier = Modifier.clickable { onEmergencyOverrideApp(memberApp) }
+                                    ) {
+                                        Text(
+                                            text = "OVERRIDE (${maxOf(1, (memberApp.overrideRemainingSeconds + 59) / 60)}m)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SuccessGreen,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                } else if (isLocked) {
                                     Surface(
                                         shape = RoundedCornerShape(6.dp),
                                         color = LockdownRed.copy(alpha = 0.2f),

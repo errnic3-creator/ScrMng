@@ -112,8 +112,9 @@ class AppMonitorService : Service() {
                                 val status = repository.evaluateAppStatus(appToEvaluate)
 
                                 if (status.isUnderEmergencyOverride) {
+                                    // Override Session active: bypass limit enforcement and do NOT trigger lockdown
                                     if (settings.isFloatingTimerEnabled) {
-                                        val remainingMin = (status.overrideRemainingSeconds / 60).toInt()
+                                        val remainingMin = maxOf(1, (status.overrideRemainingSeconds / 60).toInt())
                                         FloatingTimerOverlayService.update(
                                             context = this@AppMonitorService,
                                             appName = appToEvaluate.appName,
@@ -131,19 +132,22 @@ class AppMonitorService : Service() {
                                         else -> status.entity.lockReason.ifEmpty { "Screen time limit breached" }
                                     }
 
-                                    // Lockdown duration automatically matches configured Launch Frequency window time
-                                    val lockDuration = maxOf(1, appToEvaluate.openWindowMinutes)
-                                    val lockUntil = if (appToEvaluate.isLocked && appToEvaluate.lockUntilTimestamp > System.currentTimeMillis()) {
+                                    // Preserve fixed window countdown timer without resetting on blocked attempts
+                                    val now = System.currentTimeMillis()
+                                    val lockUntil = if (appToEvaluate.isLocked && appToEvaluate.lockUntilTimestamp > now) {
                                         appToEvaluate.lockUntilTimestamp
+                                    } else if (status.isFrequencyBreached && status.usage.windowStartTimestamp > 0L) {
+                                        val windowEnd = status.usage.windowStartTimestamp + (maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
+                                        if (windowEnd > now) windowEnd else (now + maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
                                     } else {
-                                        System.currentTimeMillis() + (lockDuration * 60 * 1000L)
+                                        now + (maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
                                     }
 
-                                    if (!appToEvaluate.isLocked) {
-                                        repository.lockApp(
+                                    if (!appToEvaluate.isLocked || appToEvaluate.lockUntilTimestamp <= now) {
+                                        repository.lockAppUntil(
                                             packageName = appToEvaluate.packageName,
                                             reason = reason,
-                                            durationMinutes = lockDuration
+                                            lockUntilTimestamp = lockUntil
                                         )
                                     }
 
