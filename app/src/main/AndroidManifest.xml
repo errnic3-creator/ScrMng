@@ -37,7 +37,9 @@
         <activity
             android:name=".ui.lockdown.LockdownActivity"
             android:exported="false"
-            android:launchMode="singleTop"
+            android:launchMode="singleInstance"
+            android:noHistory="true"
+            android:taskAffinity=""
             android:theme="@style/Theme.MyApplication"
             android:excludeFromRecents="true" />
 

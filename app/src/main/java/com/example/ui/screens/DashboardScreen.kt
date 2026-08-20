@@ -24,10 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Security
@@ -41,6 +41,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +66,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.AppGroupEntity
 import com.example.data.model.TrackedAppEntity
+import com.example.data.repository.AppGroupWithUsage
 import com.example.data.repository.TrackedAppWithUsage
 import com.example.ui.components.AppIconView
 import com.example.ui.components.EmergencyOverridePinDialog
@@ -73,7 +76,6 @@ import com.example.ui.components.SetupPinDialog
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.UsageProgressBar
 import com.example.ui.theme.LockdownRed
-import com.example.ui.theme.OverridePurple
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import com.example.ui.viewmodel.MainViewModel
@@ -84,16 +86,19 @@ fun DashboardScreen(
     onNavigateToAppPicker: () -> Unit,
     onNavigateToPermissions: () -> Unit,
     onNavigateToAppDetail: (String) -> Unit,
+    onNavigateToAdvanced: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val trackedApps by viewModel.trackedApps.collectAsStateWithLifecycle()
+    val appGroups by viewModel.appGroups.collectAsStateWithLifecycle()
     val isUsageGranted by viewModel.isUsagePermissionGranted.collectAsStateWithLifecycle()
     val isOverlayGranted by viewModel.isOverlayPermissionGranted.collectAsStateWithLifecycle()
     val isServiceRunning by viewModel.isServiceRunning.collectAsStateWithLifecycle()
     val hasMasterPin by viewModel.hasMasterPin.collectAsStateWithLifecycle()
 
     var showSetupPinDialog by remember { mutableStateOf(false) }
-    var overrideTargetApp by remember { mutableStateOf<TrackedAppWithUsage?>(null) }
+    var overrideTargetPackage by remember { mutableStateOf<String?>(null) }
+    var overrideTargetAppName by remember { mutableStateOf("") }
 
     val lockedCount = trackedApps.count { it.entity.isLocked || it.isFrequencyBreached || it.isScreenTimeBreached }
     val overrideCount = trackedApps.count { it.isUnderEmergencyOverride }
@@ -141,8 +146,63 @@ fun DashboardScreen(
                 )
             }
 
-            // 5. Tracked Apps List or Empty State
-            if (trackedApps.isEmpty()) {
+            // 5. Active App Groups Section (if any groups exist)
+            if (appGroups.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "App Groups",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        TextButton(onClick = onNavigateToAdvanced) {
+                            Text("Manage in Advanced", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+
+                items(
+                    items = appGroups,
+                    key = { "group_${it.group.id}" }
+                ) { groupWithUsage ->
+                    HomeGroupCard(
+                        groupWithUsage = groupWithUsage,
+                        onToggleGroup = { enabled ->
+                            viewModel.toggleGroupEnabled(groupWithUsage.group, enabled)
+                        },
+                        onEditGroup = onNavigateToAdvanced,
+                        onAppClick = onNavigateToAppDetail,
+                        onEmergencyOverrideApp = { appWithUsage ->
+                            if (hasMasterPin) {
+                                overrideTargetPackage = appWithUsage.entity.packageName
+                                overrideTargetAppName = appWithUsage.entity.appName
+                            } else {
+                                showSetupPinDialog = true
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 6. Tracked Apps Header
+            if (trackedApps.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Monitored Apps (${trackedApps.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            // 7. Tracked Apps List or Empty State
+            if (trackedApps.isEmpty() && appGroups.isEmpty()) {
                 item {
                     EmptyTrackedAppsCard(onAddApps = onNavigateToAppPicker)
                 }
@@ -160,12 +220,10 @@ fun DashboardScreen(
                         onSimulateLock = {
                             viewModel.simulateTriggerLock(appWithUsage.entity)
                         },
-                        onUnlock = {
-                            viewModel.manualUnlockApp(appWithUsage.entity.packageName)
-                        },
                         onEmergencyOverride = {
                             if (hasMasterPin) {
-                                overrideTargetApp = appWithUsage
+                                overrideTargetPackage = appWithUsage.entity.packageName
+                                overrideTargetAppName = appWithUsage.entity.appName
                             } else {
                                 showSetupPinDialog = true
                             }
@@ -178,14 +236,37 @@ fun DashboardScreen(
         // Floating Action Button (+ Track App)
         ExtendedFloatingActionButton(
             onClick = onNavigateToAppPicker,
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            text = { Text("Track App", fontWeight = FontWeight.Bold) },
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 80.dp, end = 20.dp)
-                .testTag("fab_track_app")
+                .padding(bottom = 24.dp, end = 20.dp)
+                .testTag("fab_track_app"),
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Track App", fontWeight = FontWeight.Bold)
+        }
+    }
+
+    if (overrideTargetPackage != null) {
+        val duration = viewModel.getOverrideDuration()
+        EmergencyOverridePinDialog(
+            appName = overrideTargetAppName,
+            durationMinutes = duration,
+            onDismiss = {
+                overrideTargetPackage = null
+                overrideTargetAppName = ""
+            },
+            onVerify = { pin -> viewModel.verifyMasterPin(pin) },
+            onSuccess = {
+                val pkg = overrideTargetPackage
+                if (pkg != null) {
+                    viewModel.grantEmergencyOverride(pkg, duration)
+                }
+                overrideTargetPackage = null
+                overrideTargetAppName = ""
+            }
         )
     }
 
@@ -198,42 +279,253 @@ fun DashboardScreen(
             }
         )
     }
+}
 
-    overrideTargetApp?.let { target ->
-        EmergencyOverridePinDialog(
-            appName = target.entity.appName,
-            durationMinutes = viewModel.getOverrideDuration(),
-            onDismiss = { overrideTargetApp = null },
-            onVerify = { pin -> viewModel.verifyMasterPin(pin) },
-            onSuccess = {
-                viewModel.grantEmergencyOverride(target.entity.packageName)
-                overrideTargetApp = null
+@Composable
+fun HomeGroupCard(
+    groupWithUsage: AppGroupWithUsage,
+    onToggleGroup: (Boolean) -> Unit,
+    onEditGroup: () -> Unit,
+    onAppClick: (String) -> Unit,
+    onEmergencyOverrideApp: (TrackedAppWithUsage) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val group = groupWithUsage.group
+    val memberApps = groupWithUsage.memberAppUsages
+    val isTodayActive = groupWithUsage.isTodayScheduleActive
+
+    ElevatedCard(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("group_card_${group.id}")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Group Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = group.iconEmoji.ifEmpty { "📁" },
+                        fontSize = 22.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isTodayActive) SuccessGreen.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                text = if (isTodayActive) "Active Today" else "Schedule Inactive",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isTodayActive) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    Text(
+                        text = group.getActiveDaysSummary(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Switch(
+                    checked = group.isEnabled,
+                    onCheckedChange = onToggleGroup,
+                    modifier = Modifier.testTag("switch_group_${group.id}")
+                )
             }
-        )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Limits description
+            Text(
+                text = buildString {
+                    append("Individual Rules: ")
+                    if (group.isFrequencyLimitEnabled) {
+                        append("${group.maxOpenCount} opens / ${group.openWindowMinutes}m")
+                    }
+                    if (group.isFrequencyLimitEnabled && group.isScreenTimeLimitEnabled) {
+                        append(" • ")
+                    }
+                    if (group.isScreenTimeLimitEnabled) {
+                        append("${group.maxScreenTimeMinutes}m daily screen time")
+                    }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (memberApps.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // List of bundled apps with individual progress
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    memberApps.forEach { memberApp ->
+                        val screenTimeMin = (memberApp.usage.screenTimeMillisToday / (60 * 1000)).toInt()
+                        val isLocked = memberApp.entity.isLocked || memberApp.isFrequencyBreached || memberApp.isScreenTimeBreached
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                .clickable { onAppClick(memberApp.entity.packageName) }
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AppIconView(
+                                    packageName = memberApp.entity.packageName,
+                                    size = 32.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = memberApp.entity.appName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "${memberApp.usage.opensInWindow}/${group.maxOpenCount} opens • ${screenTimeMin}/${group.maxScreenTimeMinutes}m",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                if (isLocked) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = LockdownRed.copy(alpha = 0.2f),
+                                        modifier = Modifier.clickable { onEmergencyOverrideApp(memberApp) }
+                                    ) {
+                                        Text(
+                                            text = "LOCKED",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = LockdownRed,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.ChevronRight,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            // Progress bars
+                            if (group.isFrequencyLimitEnabled) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                UsageProgressBar(
+                                    current = memberApp.usage.opensInWindow,
+                                    max = group.maxOpenCount,
+                                    label = "Launch Frequency",
+                                    unit = "opens"
+                                )
+                            }
+                            if (group.isScreenTimeLimitEnabled) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                UsageProgressBar(
+                                    current = screenTimeMin,
+                                    max = group.maxScreenTimeMinutes,
+                                    label = "Screen Time",
+                                    unit = "min"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Footer action
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onEditGroup() }
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Edit Group Rules",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun ServiceControlCard(
+fun ServiceControlCard(
     isServiceRunning: Boolean,
     onToggle: (Boolean) -> Unit,
     hasPermissions: Boolean,
-    onGrantPermissions: () -> Unit
+    onGrantPermissions: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    ElevatedCard(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.elevatedCardColors(
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
             containerColor = if (isServiceRunning && hasPermissions)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                MaterialTheme.colorScheme.primaryContainer
             else
                 MaterialTheme.colorScheme.surfaceVariant
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -243,21 +535,21 @@ private fun ServiceControlCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(
                             if (isServiceRunning && hasPermissions)
-                                SuccessGreen.copy(alpha = 0.2f)
+                                MaterialTheme.colorScheme.primary
                             else
-                                WarningOrange.copy(alpha = 0.2f)
+                                MaterialTheme.colorScheme.outline
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (isServiceRunning && hasPermissions) Icons.Default.Shield else Icons.Default.PowerSettingsNew,
-                        contentDescription = null,
-                        tint = if (isServiceRunning && hasPermissions) SuccessGreen else WarningOrange,
-                        modifier = Modifier.size(26.dp)
+                        contentDescription = "Protection Status",
+                        tint = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
@@ -265,250 +557,243 @@ private fun ServiceControlCard(
 
                 Column {
                     Text(
-                        text = if (isServiceRunning && hasPermissions) "ScrMngr Guard Active" else "Monitor Guard Paused",
+                        text = if (isServiceRunning && hasPermissions) "Active Protection" else "Protection Inactive",
                         style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isServiceRunning && hasPermissions)
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = if (!hasPermissions)
+                            "Setup permissions required"
+                        else if (isServiceRunning)
+                            "Enforcing app limits in real-time"
+                        else
+                            "Tap switch to enable guard",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isServiceRunning && hasPermissions)
+                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    )
+                }
+            }
+
+            if (hasPermissions) {
+                Switch(
+                    checked = isServiceRunning,
+                    onCheckedChange = onToggle,
+                    modifier = Modifier.testTag("service_status_switch")
+                )
+            } else {
+                Button(
+                    onClick = onGrantPermissions,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Grant", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionAlertBanner(
+    isUsageGranted: Boolean,
+    isOverlayGranted: Boolean,
+    onOpenPermissions: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = LockdownRed.copy(alpha = 0.12f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onOpenPermissions() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = LockdownRed,
+                modifier = Modifier.size(24.dp)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Permissions Required",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = LockdownRed
+                )
+                Text(
+                    text = "Usage Access & Overlay permissions are required for limit enforcement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = LockdownRed
+            )
+        }
+    }
+}
+
+@Composable
+fun PinPromptCard(
+    onSetupPin: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = WarningOrange.copy(alpha = 0.12f)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = null,
+                    tint = WarningOrange,
+                    modifier = Modifier.size(22.dp)
+                )
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Column {
+                    Text(
+                        text = "Set Master Security PIN",
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (isServiceRunning && hasPermissions)
-                            "Fixed-window limiter & barrier active"
-                        else
-                            "Real-time enforcement paused",
+                        text = "Required for unlocking & emergency pass",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            Switch(
-                checked = isServiceRunning && hasPermissions,
-                onCheckedChange = { checked ->
-                    if (!hasPermissions) {
-                        onGrantPermissions()
-                    } else {
-                        onToggle(checked)
-                    }
-                },
-                thumbContent = if (isServiceRunning && hasPermissions) {
-                    {
-                        Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = null,
-                            modifier = Modifier.size(SwitchDefaults.IconSize)
-                        )
-                    }
-                } else null,
-                modifier = Modifier.testTag("service_status_switch")
-            )
-        }
-    }
-}
-
-@Composable
-private fun PermissionAlertBanner(
-    isUsageGranted: Boolean,
-    isOverlayGranted: Boolean,
-    onOpenPermissions: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = WarningOrange.copy(alpha = 0.15f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Warning,
-                contentDescription = null,
-                tint = WarningOrange,
-                modifier = Modifier.size(28.dp)
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "System Setup Required",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = when {
-                        !isUsageGranted && !isOverlayGranted -> "Usage Stats and Overlay permissions are missing."
-                        !isUsageGranted -> "Usage Access permission is required for launch tracking."
-                        else -> "Overlay permission is required for lock barriers."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            TextButton(
-                onClick = onOpenPermissions,
-                modifier = Modifier.testTag("banner_grant_permissions_button")
-            ) {
-                Text("Setup", fontWeight = FontWeight.Bold, color = WarningOrange)
-            }
-        }
-    }
-}
-
-@Composable
-private fun PinPromptCard(onSetupPin: () -> Unit) {
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = OverridePurple.copy(alpha = 0.12f)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(OverridePurple.copy(alpha = 0.2f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Key,
-                    contentDescription = null,
-                    tint = OverridePurple,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Master Security PIN",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Set a 4-digit PIN for emergency temporary access overrides.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            OutlinedButton(
+            Button(
                 onClick = onSetupPin,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("dashboard_setup_pin_button")
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = WarningOrange),
+                modifier = Modifier.testTag("btn_setup_master_pin")
             ) {
-                Text("Set PIN", fontWeight = FontWeight.Bold)
+                Text("Set PIN", fontSize = 12.sp)
             }
         }
     }
 }
 
 @Composable
-private fun DashboardMetricsRow(
+fun DashboardMetricsRow(
     trackedCount: Int,
     lockedCount: Int,
-    overrideCount: Int
+    overrideCount: Int,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        MetricTile(
+        MetricCard(
             title = "Tracked",
             value = "$trackedCount",
             icon = Icons.Default.Timer,
-            tint = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f)
         )
 
-        MetricTile(
-            title = "Lockdown",
+        MetricCard(
+            title = "In Lockdown",
             value = "$lockedCount",
             icon = Icons.Default.Lock,
-            tint = if (lockedCount > 0) LockdownRed else SuccessGreen,
+            color = if (lockedCount > 0) LockdownRed else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
 
-        MetricTile(
-            title = "Overrides",
+        MetricCard(
+            title = "Override",
             value = "$overrideCount",
             icon = Icons.Default.HourglassBottom,
-            tint = OverridePurple,
+            color = if (overrideCount > 0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
     }
 }
 
 @Composable
-private fun MetricTile(
+fun MetricCard(
     title: String,
     value: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    tint: Color,
+    color: Color,
     modifier: Modifier = Modifier
 ) {
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.Start
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = tint,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Black,
+                color = color
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
 @Composable
-private fun TrackedAppCard(
+fun TrackedAppCard(
     app: TrackedAppWithUsage,
     onCardClick: () -> Unit,
     onToggleLimit: (Boolean) -> Unit,
     onSimulateLock: () -> Unit,
-    onUnlock: () -> Unit,
-    onEmergencyOverride: () -> Unit
+    onEmergencyOverride: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val entity = app.entity
     val usage = app.usage
@@ -517,21 +802,18 @@ private fun TrackedAppCard(
 
     val screenTimeMinutes = (usage.screenTimeMillisToday / (60 * 1000)).toInt()
 
-    Card(
+    ElevatedCard(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                isOverride -> OverridePurple.copy(alpha = 0.08f)
-                isLocked -> LockdownRed.copy(alpha = 0.08f)
-                !entity.isLimitEnabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                else -> MaterialTheme.colorScheme.surface
-            }
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (isLocked)
+                LockdownRed.copy(alpha = 0.05f)
+            else
+                MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(2.dp),
-        modifier = Modifier
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = modifier
             .fillMaxWidth()
-            .clickable { onCardClick() }
-            .testTag("tracked_app_card_${entity.packageName}")
+            .testTag("card_app_${entity.packageName}")
     ) {
         Column(
             modifier = Modifier
@@ -620,33 +902,25 @@ private fun TrackedAppCard(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Quick Actions Footer
+            // Quick Actions Footer: Properly aligned and spaced across card width
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isLocked) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = onEmergencyOverride,
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = OverridePurple),
-                            modifier = Modifier.testTag("btn_override_${entity.packageName}")
-                        ) {
-                            Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Emergency Pass", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = onUnlock,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Unlock", fontSize = 12.sp)
-                        }
+                    Button(
+                        onClick = onEmergencyOverride,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier.testTag("btn_override_${entity.packageName}")
+                    ) {
+                        Icon(Icons.Default.HourglassBottom, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Emergency Pass", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 } else {
                     OutlinedButton(
@@ -661,7 +935,10 @@ private fun TrackedAppCard(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onCardClick() }
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onCardClick() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     Text(
                         text = "Edit Rules",
@@ -669,6 +946,7 @@ private fun TrackedAppCard(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = null,
@@ -682,11 +960,14 @@ private fun TrackedAppCard(
 }
 
 @Composable
-private fun EmptyTrackedAppsCard(onAddApps: () -> Unit) {
+fun EmptyTrackedAppsCard(
+    onAddApps: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-        modifier = Modifier.fillMaxWidth()
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
@@ -702,7 +983,7 @@ private fun EmptyTrackedAppsCard(onAddApps: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.Lock,
+                    imageVector = Icons.Default.Timer,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
@@ -712,7 +993,7 @@ private fun EmptyTrackedAppsCard(onAddApps: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "No Monitored Apps Yet",
+                text = "No Apps Tracked Yet",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
@@ -721,22 +1002,22 @@ private fun EmptyTrackedAppsCard(onAddApps: () -> Unit) {
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Tap the '+ Track App' button below to choose apps from your device and set custom open frequency & screen time limits.",
-                style = MaterialTheme.typography.bodyMedium,
+                text = "Select distracting applications to set launch frequency rules and daily screen time limits.",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             Button(
                 onClick = onAddApps,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("empty_state_add_app_button")
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Select Apps to Track", fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Track First App")
             }
         }
     }

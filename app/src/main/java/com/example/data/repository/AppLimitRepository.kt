@@ -8,12 +8,12 @@ import com.example.data.model.AppGroupEntity
 import com.example.data.model.AppSettings
 import com.example.data.model.TrackedAppEntity
 import com.example.data.model.UsageLogEntity
-import com.example.data.util.GroupUsageSummary
 import com.example.data.util.RealtimeAppUsage
 import com.example.data.util.SecurityHelper
 import com.example.data.util.UsageStatsHelper
+import com.example.service.FloatingTimerOverlayService
+import com.example.service.LockdownOverlayService
 import kotlinx.coroutines.flow.Flow
-import java.util.Calendar
 
 data class TrackedAppWithUsage(
     val entity: TrackedAppEntity,
@@ -27,10 +27,9 @@ data class TrackedAppWithUsage(
 
 data class AppGroupWithUsage(
     val group: AppGroupEntity,
-    val usage: GroupUsageSummary,
-    val isFrequencyBreached: Boolean,
-    val isScreenTimeBreached: Boolean,
-    val isScheduleActive: Boolean,
+    val memberAppUsages: List<TrackedAppWithUsage>,
+    val isTodayScheduleActive: Boolean,
+    val isAnyMemberLocked: Boolean,
     val isUnderEmergencyOverride: Boolean,
     val overrideRemainingSeconds: Long,
     val lockRemainingSeconds: Long
@@ -67,7 +66,7 @@ class AppLimitRepository(
             packageName = app.packageName,
             appName = app.appName,
             eventType = "LIMIT_CONFIG_CHANGED",
-            details = "Added to tracking list. Launch limit: ${if (app.isFrequencyLimitEnabled) "${app.maxOpenCount} opens / ${app.openWindowMinutes}m" else "Disabled"}, Screen time: ${if (app.isScreenTimeLimitEnabled) "${app.maxScreenTimeMinutes}m" else "Disabled"}"
+            details = "Added to tracking list. Frequency limit: ${if (app.isFrequencyLimitEnabled) "${app.maxOpenCount} opens / ${app.openWindowMinutes}m" else "Disabled"}, Screen time: ${if (app.isScreenTimeLimitEnabled) "${app.maxScreenTimeMinutes}m" else "Disabled"}"
         )
     }
 
@@ -77,7 +76,7 @@ class AppLimitRepository(
             packageName = app.packageName,
             appName = app.appName,
             eventType = "LIMIT_CONFIG_CHANGED",
-            details = "Limits updated. Launch limit: ${if (app.isFrequencyLimitEnabled) "${app.maxOpenCount} opens / ${app.openWindowMinutes}m" else "Disabled"}, Screen time: ${if (app.isScreenTimeLimitEnabled) "${app.maxScreenTimeMinutes}m" else "Disabled"}"
+            details = "Limits updated. Frequency limit: ${if (app.isFrequencyLimitEnabled) "${app.maxOpenCount} opens / ${app.openWindowMinutes}m" else "Disabled"}, Screen time: ${if (app.isScreenTimeLimitEnabled) "${app.maxScreenTimeMinutes}m" else "Disabled"}"
         )
     }
 
@@ -97,6 +96,8 @@ class AppLimitRepository(
     // App Group Operations
     suspend fun addAppGroup(group: AppGroupEntity): Long {
         val id = appGroupDao.insertGroup(group)
+        // Ensure each app in the group exists in tracked_apps with individual limits
+        syncGroupMemberApps(group)
         logEvent(
             packageName = "group_${group.name}",
             appName = group.name,
@@ -108,12 +109,51 @@ class AppLimitRepository(
 
     suspend fun updateAppGroup(group: AppGroupEntity) {
         appGroupDao.updateGroup(group)
+        syncGroupMemberApps(group)
         logEvent(
             packageName = "group_${group.name}",
             appName = group.name,
             eventType = "GROUP_UPDATED",
-            details = "Updated app group limits and schedules"
+            details = "Updated app group rules"
         )
+    }
+
+    private suspend fun syncGroupMemberApps(group: AppGroupEntity) {
+        val packages = group.getPackageList()
+        val pm = context.packageManager
+        for (pkg in packages) {
+            val existing = trackedAppDao.getTrackedApp(pkg)
+            val appLabel = try {
+                val appInfo = pm.getApplicationInfo(pkg, 0)
+                pm.getApplicationLabel(appInfo).toString()
+            } catch (e: Exception) {
+                pkg.substringAfterLast('.')
+            }
+
+            if (existing != null) {
+                val updated = existing.copy(
+                    maxOpenCount = group.maxOpenCount,
+                    openWindowMinutes = group.openWindowMinutes,
+                    isFrequencyLimitEnabled = group.isFrequencyLimitEnabled,
+                    maxScreenTimeMinutes = group.maxScreenTimeMinutes,
+                    isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled
+                )
+                trackedAppDao.update(updated)
+            } else {
+                val newApp = TrackedAppEntity(
+                    packageName = pkg,
+                    appName = appLabel,
+                    maxOpenCount = group.maxOpenCount,
+                    openWindowMinutes = group.openWindowMinutes,
+                    isFrequencyLimitEnabled = group.isFrequencyLimitEnabled,
+                    maxScreenTimeMinutes = group.maxScreenTimeMinutes,
+                    isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled,
+                    category = group.name,
+                    addedTimestamp = System.currentTimeMillis()
+                )
+                trackedAppDao.insert(newApp)
+            }
+        }
     }
 
     suspend fun deleteAppGroup(group: AppGroupEntity) {
@@ -184,6 +224,12 @@ class AppLimitRepository(
         appGroupDao.clearAllGroups()
         usageLogDao.clearAllLogs()
         settings.resetAllPreferences()
+        try {
+            LockdownOverlayService.dismiss(context)
+            FloatingTimerOverlayService.hide(context)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private suspend fun logEvent(packageName: String, appName: String, eventType: String, details: String) {
@@ -203,11 +249,16 @@ class AppLimitRepository(
 
     /**
      * Checks an individual app's live usage against configured limits.
-     * Uses fixed-interval window-based reset logic.
+     * Uses track-on-add baseline and fixed-interval window-based reset logic.
      */
     fun evaluateAppStatus(app: TrackedAppEntity): TrackedAppWithUsage {
         val now = System.currentTimeMillis()
-        val usage = UsageStatsHelper.getUsageForPackage(context, app.packageName, app.openWindowMinutes)
+        val usage = UsageStatsHelper.getUsageForPackage(
+            context = context,
+            packageName = app.packageName,
+            windowMinutes = app.openWindowMinutes,
+            trackedFromTimestamp = app.addedTimestamp
+        )
 
         val isUnderOverride = app.emergencyOverrideUntilTimestamp > now
         val overrideRemainingSeconds = if (isUnderOverride) {
@@ -241,18 +292,41 @@ class AppLimitRepository(
     }
 
     /**
-     * Checks an app group's live usage and scheduled active window.
+     * Checks an app group's individual member apps (NO POOLED LIMITS).
+     * Rules configured at the group level apply individually to each member app.
      */
     fun evaluateGroupStatus(group: AppGroupEntity): AppGroupWithUsage {
         val now = System.currentTimeMillis()
         val packageList = group.getPackageList()
-        val usage = UsageStatsHelper.getGroupUsage(
-            context = context,
-            groupId = group.id,
-            groupName = group.name,
-            packageList = packageList,
-            windowMinutes = group.openWindowMinutes
-        )
+        val isTodayActive = group.isTodayActive() && group.isEnabled
+
+        val pm = context.packageManager
+        val memberUsages = mutableListOf<TrackedAppWithUsage>()
+
+        for (pkg in packageList) {
+            val appLabel = try {
+                val info = pm.getApplicationInfo(pkg, 0)
+                pm.getApplicationLabel(info).toString()
+            } catch (e: Exception) {
+                pkg.substringAfterLast('.')
+            }
+
+            val appEntity = TrackedAppEntity(
+                packageName = pkg,
+                appName = appLabel,
+                maxOpenCount = group.maxOpenCount,
+                openWindowMinutes = group.openWindowMinutes,
+                isFrequencyLimitEnabled = group.isFrequencyLimitEnabled && isTodayActive,
+                maxScreenTimeMinutes = group.maxScreenTimeMinutes,
+                isScreenTimeLimitEnabled = group.isScreenTimeLimitEnabled && isTodayActive,
+                isLimitEnabled = group.isEnabled && isTodayActive,
+                category = group.name
+            )
+            val usage = evaluateAppStatus(appEntity)
+            memberUsages.add(usage)
+        }
+
+        val isAnyMemberLocked = memberUsages.any { it.isFrequencyBreached || it.isScreenTimeBreached || it.entity.isLocked }
 
         val isUnderOverride = group.emergencyOverrideUntilTimestamp > now
         val overrideRemainingSeconds = if (isUnderOverride) {
@@ -263,46 +337,14 @@ class AppLimitRepository(
             (group.lockUntilTimestamp - now) / 1000L
         } else 0L
 
-        val isFrequencyBreached = group.isEnabled &&
-                group.isFrequencyLimitEnabled &&
-                (usage.combinedOpensInWindow >= group.maxOpenCount)
-
-        val combinedScreenMinutes = (usage.combinedScreenTimeMillisToday / (60 * 1000)).toInt()
-        val isScreenTimeBreached = group.isEnabled &&
-                group.isScreenTimeLimitEnabled &&
-                (combinedScreenMinutes >= group.maxScreenTimeMinutes)
-
-        // Check if schedule is currently active
-        val isScheduleActive = if (group.isEnabled && group.isScheduleEnabled) {
-            isTimeInGroupSchedule(group, now)
-        } else false
-
         return AppGroupWithUsage(
             group = group,
-            usage = usage,
-            isFrequencyBreached = isFrequencyBreached,
-            isScreenTimeBreached = isScreenTimeBreached,
-            isScheduleActive = isScheduleActive,
+            memberAppUsages = memberUsages,
+            isTodayScheduleActive = isTodayActive,
+            isAnyMemberLocked = isAnyMemberLocked,
             isUnderEmergencyOverride = isUnderOverride,
             overrideRemainingSeconds = overrideRemainingSeconds,
             lockRemainingSeconds = lockRemainingSeconds
         )
-    }
-
-    private fun isTimeInGroupSchedule(group: AppGroupEntity, now: Long): Boolean {
-        val calendar = Calendar.getInstance().apply { timeInMillis = now }
-        val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK) // 1=Sun, 2=Mon...
-        if (!group.getDaysList().contains(dayOfWeek)) return false
-
-        val currentMinuteOfDay = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-        val startMinuteOfDay = group.startHour * 60 + group.startMinute
-        val endMinuteOfDay = group.endHour * 60 + group.endMinute
-
-        return if (startMinuteOfDay <= endMinuteOfDay) {
-            currentMinuteOfDay in startMinuteOfDay..endMinuteOfDay
-        } else {
-            // Over midnight
-            currentMinuteOfDay >= startMinuteOfDay || currentMinuteOfDay <= endMinuteOfDay
-        }
     }
 }

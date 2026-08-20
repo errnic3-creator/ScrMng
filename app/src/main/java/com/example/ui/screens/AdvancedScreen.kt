@@ -22,20 +22,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -69,6 +76,7 @@ import com.example.ui.components.UsageProgressBar
 import com.example.ui.theme.LockdownRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.viewmodel.MainViewModel
+import java.util.Calendar
 import kotlin.math.roundToInt
 
 @Composable
@@ -83,13 +91,35 @@ fun AdvancedScreen(
     var showGroupDialog by remember { mutableStateOf(false) }
     var editingGroup by remember { mutableStateOf<AppGroupEntity?>(null) }
 
+    // Selected day for weekly schedule view: Calendar values 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat, 1=Sun (0=All)
+    var selectedScheduleDay by remember {
+        val today = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
+        mutableIntStateOf(today)
+    }
+
+    val daysOfWeek = listOf(
+        2 to "Mon",
+        3 to "Tue",
+        4 to "Wed",
+        5 to "Thu",
+        6 to "Fri",
+        7 to "Sat",
+        1 to "Sun"
+    )
+
+    // Filter groups by selected schedule day if not viewing all
+    val displayedGroups = remember(appGroups, selectedScheduleDay) {
+        if (selectedScheduleDay == 0) appGroups
+        else appGroups.filter { it.group.getDaysList().contains(selectedScheduleDay) }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Master group toggle card
+            // 1. Master Group Rules Toggle
             item {
                 ElevatedCard(
                     shape = RoundedCornerShape(24.dp),
@@ -133,13 +163,13 @@ fun AdvancedScreen(
 
                             Column {
                                 Text(
-                                    text = "App Group Pooling",
+                                    text = "App Group Enforcement",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (isGroupLimitsEnabled) "Multi-app quotas & schedules active" else "Group pooling paused",
+                                    text = if (isGroupLimitsEnabled) "Individual rules applied to grouped apps" else "Group enforcement paused",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -155,47 +185,104 @@ fun AdvancedScreen(
                 }
             }
 
-            // Explanatory Banner
+            // 2. Weekly Schedule Day Selector Profile
             item {
                 Card(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(2.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Schedule,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Weekly Schedule Profiles",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
                         Text(
-                            text = "Bundle multiple apps into unified groups to share a combined screen time pool or enforce active hours schedules (e.g. Work Hours, Bedtime).",
+                            text = "Filter or inspect active rules for specific days of the week:",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // 7-day selector buttons
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            item {
+                                FilterChip(
+                                    selected = selectedScheduleDay == 0,
+                                    onClick = { selectedScheduleDay = 0 },
+                                    label = { Text("All Days") },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                )
+                            }
+                            items(daysOfWeek) { (dayVal, dayLabel) ->
+                                val isSelected = selectedScheduleDay == dayVal
+                                val calendar = Calendar.getInstance()
+                                val isToday = calendar.get(Calendar.DAY_OF_WEEK) == dayVal
+
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { selectedScheduleDay = dayVal },
+                                    label = {
+                                        Text(if (isToday) "$dayLabel (Today)" else dayLabel)
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
 
-            // Header
+            // 3. Header: Configured App Groups
             item {
-                Text(
-                    text = "Configured Groups (${appGroups.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (selectedScheduleDay == 0)
+                            "All App Groups (${appGroups.size})"
+                        else {
+                            val dayLabel = daysOfWeek.find { it.first == selectedScheduleDay }?.second ?: ""
+                            "Active on $dayLabel (${displayedGroups.size})"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
 
-            // Group List or Empty State
-            if (appGroups.isEmpty()) {
+            // 4. Group List or Empty State
+            if (displayedGroups.isEmpty()) {
                 item {
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -225,13 +312,13 @@ fun AdvancedScreen(
                             }
                             Spacer(modifier = Modifier.height(14.dp))
                             Text(
-                                text = "No App Groups Configured",
+                                text = if (appGroups.isEmpty()) "No App Groups Configured" else "No Groups Active on Selected Day",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Create groups like 'Social Media' or 'Gaming' to share a single combined screen time limit.",
+                                text = "Create groups like 'Doomscroll' or 'Games' to enforce individual limits across multiple apps with schedule profiles.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
@@ -247,14 +334,14 @@ fun AdvancedScreen(
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Create First Group")
+                                Text("Create App Group")
                             }
                         }
                     }
                 }
             } else {
-                items(appGroups, key = { it.group.id }) { groupWithUsage ->
-                    AppGroupCard(
+                items(displayedGroups, key = { it.group.id }) { groupWithUsage ->
+                    AdvancedGroupCard(
                         groupWithUsage = groupWithUsage,
                         onToggle = { enabled ->
                             viewModel.toggleGroupEnabled(groupWithUsage.group, enabled)
@@ -310,23 +397,32 @@ fun AdvancedScreen(
 }
 
 @Composable
-private fun AppGroupCard(
+private fun AdvancedGroupCard(
     groupWithUsage: AppGroupWithUsage,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val group = groupWithUsage.group
-    val totalScreenTimeMinutes = (groupWithUsage.usage.combinedScreenTimeMillisToday / (60 * 1000)).toInt()
-    val isLocked = groupWithUsage.isFrequencyBreached || groupWithUsage.isScreenTimeBreached || groupWithUsage.isScheduleActive
+    val memberApps = groupWithUsage.memberAppUsages
+    val isTodayActive = groupWithUsage.isTodayScheduleActive
     val packages = group.getPackageList()
+    val activeDays = group.getDaysList()
+
+    val dayAbbrs = listOf(
+        2 to "M",
+        3 to "T",
+        4 to "W",
+        5 to "T",
+        6 to "F",
+        7 to "S",
+        1 to "S"
+    )
 
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isLocked)
-                LockdownRed.copy(alpha = 0.08f)
-            else if (!group.isEnabled)
+            containerColor = if (!group.isEnabled)
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
             else
                 MaterialTheme.colorScheme.surface
@@ -348,14 +444,14 @@ private fun AppGroupCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = group.iconEmoji.ifEmpty { "📱" },
-                        fontSize = 20.sp
+                        text = group.iconEmoji.ifEmpty { "📁" },
+                        fontSize = 22.sp
                     )
                 }
 
@@ -369,9 +465,10 @@ private fun AppGroupCard(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "${packages.size} apps bundled",
+                        text = "${packages.size} apps • ${group.getActiveDaysSummary()}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -382,70 +479,145 @@ private fun AppGroupCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // App Icons row in this group
-            if (packages.isNotEmpty()) {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(vertical = 4.dp)
-                ) {
-                    items(packages) { pkg ->
-                        AppIconView(packageName = pkg, size = 32.dp)
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-            }
-
-            // Schedule tag if active
-            if (group.isScheduleEnabled) {
-                val startFormatted = String.format("%02d:00", group.startHour)
-                val endFormatted = String.format("%02d:00", group.endHour)
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(bottom = 10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+            // Day indicators (M T W T F S S)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                dayAbbrs.forEach { (dayVal, label) ->
+                    val isActive = activeDays.contains(dayVal)
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            Icons.Default.Schedule,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Schedule: $startFormatted – $endFormatted",
+                            text = label,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                            color = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
 
-            // Shared Screen Time
-            UsageProgressBar(
-                label = "Shared Screen Time",
-                current = totalScreenTimeMinutes,
-                max = group.maxScreenTimeMinutes,
-                unit = "min",
-                windowDescription = "pooled"
-            )
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // Individual Rule Details
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "INDIVIDUAL APP RULES",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (group.isFrequencyLimitEnabled) {
+                        Text(
+                            text = "• Launch Frequency: Max ${group.maxOpenCount} opens in ${group.openWindowMinutes}m window",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    if (group.isScreenTimeLimitEnabled) {
+                        Text(
+                            text = "• Daily Screen Time: Max ${group.maxScreenTimeMinutes} min",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
 
-            // Shared Launch Frequency
-            UsageProgressBar(
-                label = "Shared Launch Frequency",
-                current = groupWithUsage.usage.combinedOpensInWindow,
-                max = group.maxOpenCount,
-                unit = "opens",
-                windowDescription = "${group.openWindowMinutes}m window"
-            )
+            // Bundled Apps with Individual Live Tracking
+            if (memberApps.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Bundled Apps (${memberApps.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    memberApps.forEach { memberApp ->
+                        val screenTimeMin = (memberApp.usage.screenTimeMillisToday / (60 * 1000)).toInt()
+                        val isLocked = memberApp.entity.isLocked || memberApp.isFrequencyBreached || memberApp.isScreenTimeBreached
+
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AppIconView(
+                                        packageName = memberApp.entity.packageName,
+                                        size = 28.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = memberApp.entity.appName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (isLocked) {
+                                        Text(
+                                            text = "LOCKED",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = LockdownRed
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "${memberApp.usage.opensInWindow}/${group.maxOpenCount} opens • ${screenTimeMin}/${group.maxScreenTimeMinutes}m",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (group.isFrequencyLimitEnabled) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    UsageProgressBar(
+                                        current = memberApp.usage.opensInWindow,
+                                        max = group.maxOpenCount,
+                                        label = "Launch Frequency",
+                                        unit = "opens"
+                                    )
+                                }
+
+                                if (group.isScreenTimeLimitEnabled) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    UsageProgressBar(
+                                        current = screenTimeMin,
+                                        max = group.maxScreenTimeMinutes,
+                                        label = "Screen Time",
+                                        unit = "min"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -483,25 +655,49 @@ private fun AppGroupEditorDialog(
 ) {
     var name by remember { mutableStateOf(group?.name ?: "") }
     var selectedPackages by remember { mutableStateOf(group?.getPackageList()?.toSet() ?: emptySet()) }
-    var maxScreenTimeMinutes by remember { mutableIntStateOf(group?.maxScreenTimeMinutes ?: 60) }
-    var maxOpenCount by remember { mutableIntStateOf(group?.maxOpenCount ?: 10) }
-    var openWindowMinutes by remember { mutableIntStateOf(group?.openWindowMinutes ?: 60) }
+    var iconEmoji by remember { mutableStateOf(group?.iconEmoji ?: "📱") }
 
-    var isScheduleEnabled by remember { mutableStateOf(group?.isScheduleEnabled ?: false) }
-    var startHour by remember { mutableIntStateOf(group?.startHour ?: 9) }
-    var endHour by remember { mutableIntStateOf(group?.endHour ?: 17) }
+    // Independent limit switches
+    var isFrequencyLimitEnabled by remember { mutableStateOf(group?.isFrequencyLimitEnabled ?: true) }
+    var maxOpenCount by remember { mutableIntStateOf(group?.maxOpenCount ?: 5) }
+    var openWindowMinutes by remember { mutableIntStateOf(group?.openWindowMinutes ?: 30) }
 
-    val presetTemplates = listOf(
-        "Social Media" to listOf("com.instagram.android", "com.zhiliaoapp.musically", "com.twitter.android", "com.reddit.frontpage"),
-        "Entertainment" to listOf("com.google.android.youtube", "com.netflix.mediaclient", "com.spotify.music"),
-        "Focus Group" to emptyList()
+    var isScreenTimeLimitEnabled by remember { mutableStateOf(group?.isScreenTimeLimitEnabled ?: true) }
+    var maxScreenTimeMinutes by remember { mutableIntStateOf(group?.maxScreenTimeMinutes ?: 45) }
+
+    // Weekly Schedule Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+    var selectedDays by remember {
+        mutableStateOf(group?.getDaysList()?.toSet() ?: setOf(1, 2, 3, 4, 5, 6, 7))
+    }
+
+    // Search bar query for filtering target apps
+    var appSearchQuery by remember { mutableStateOf("") }
+
+    val filteredApps = remember(installedApps, appSearchQuery) {
+        if (appSearchQuery.isBlank()) installedApps
+        else installedApps.filter {
+            it.appName.contains(appSearchQuery, ignoreCase = true) ||
+            it.packageName.contains(appSearchQuery, ignoreCase = true)
+        }
+    }
+
+    val daysOfWeek = listOf(
+        2 to "Mon",
+        3 to "Tue",
+        4 to "Wed",
+        5 to "Thu",
+        6 to "Fri",
+        7 to "Sat",
+        1 to "Sun"
     )
+
+    val emojis = listOf("📱", "🎮", "💬", "📺", "🔥", "🛑", "⏰", "🎯")
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = if (group == null) "Create App Group" else "Edit App Group",
+                text = if (group == null) "Create App Group" else "Edit App Group Rules",
                 fontWeight = FontWeight.Bold
             )
         },
@@ -509,79 +705,111 @@ private fun AppGroupEditorDialog(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(420.dp),
+                    .height(440.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Group Name
+                // Group Name & Emoji
                 item {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Group Name") },
-                        placeholder = { Text("e.g. Social Media, Games") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("Group Name") },
+                            placeholder = { Text("e.g. Doomscroll, Games") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("input_group_name")
+                        )
+                    }
 
-                // Presets chips
-                if (group == null) {
-                    item {
-                        Text("Quick Presets:", style = MaterialTheme.typography.labelSmall)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(presetTemplates) { (presetName, defaultPkgs) ->
-                                FilterChip(
-                                    selected = name == presetName,
-                                    onClick = {
-                                        name = presetName
-                                        if (defaultPkgs.isNotEmpty()) {
-                                            val available = installedApps.map { it.packageName }.toSet()
-                                            val matched = defaultPkgs.filter { available.contains(it) }.toSet()
-                                            if (matched.isNotEmpty()) {
-                                                selectedPackages = matched
-                                            }
-                                        }
-                                    },
-                                    label = { Text(presetName) },
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                            }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(emojis) { emoji ->
+                            FilterChip(
+                                selected = iconEmoji == emoji,
+                                onClick = { iconEmoji = emoji },
+                                label = { Text(emoji, fontSize = 16.sp) },
+                                shape = CircleShape
+                            )
                         }
                     }
                 }
 
-                // Shared Screen Time Slider
+                // Weekly Schedule Days Selector
                 item {
+                    HorizontalDivider()
                     Text(
-                        text = "Shared Daily Screen Time: $maxScreenTimeMinutes min",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
+                        text = "Weekly Schedule Days",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
                     )
-                    Slider(
-                        value = maxScreenTimeMinutes.toFloat(),
-                        onValueChange = { maxScreenTimeMinutes = it.roundToInt() },
-                        valueRange = 15f..240f,
-                        steps = 14
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Select days when this group's rules apply:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Quick buttons: All, Weekdays, Weekends
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedDays.size == 7,
+                            onClick = { selectedDays = setOf(1, 2, 3, 4, 5, 6, 7) },
+                            label = { Text("All Week", fontSize = 11.sp) },
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        FilterChip(
+                            selected = selectedDays == setOf(2, 3, 4, 5, 6),
+                            onClick = { selectedDays = setOf(2, 3, 4, 5, 6) },
+                            label = { Text("Weekdays", fontSize = 11.sp) },
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        FilterChip(
+                            selected = selectedDays == setOf(1, 7),
+                            onClick = { selectedDays = setOf(1, 7) },
+                            label = { Text("Weekends", fontSize = 11.sp) },
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // 7-day checkboxes/chips
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(daysOfWeek) { (dayVal, label) ->
+                            val isSelected = selectedDays.contains(dayVal)
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    selectedDays = if (isSelected) {
+                                        if (selectedDays.size > 1) selectedDays - dayVal else selectedDays
+                                    } else {
+                                        selectedDays + dayVal
+                                    }
+                                },
+                                label = { Text(label, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            )
+                        }
+                    }
                 }
 
-                // Shared Launch Count Slider
-                item {
-                    Text(
-                        text = "Shared Open Frequency: $maxOpenCount opens in $openWindowMinutes min",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Slider(
-                        value = maxOpenCount.toFloat(),
-                        onValueChange = { maxOpenCount = it.roundToInt() },
-                        valueRange = 2f..30f,
-                        steps = 13
-                    )
-                }
-
-                // Schedule Enforcing Toggle & Presets
+                // Independent Limit 1: Launch Frequency Limit
                 item {
                     HorizontalDivider()
                     Row(
@@ -589,56 +817,135 @@ private fun AppGroupEditorDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Time-of-Day Schedule",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Launch Frequency Limit",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Enforce max opens per time window",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Switch(
-                            checked = isScheduleEnabled,
-                            onCheckedChange = { isScheduleEnabled = it }
+                            checked = isFrequencyLimitEnabled,
+                            onCheckedChange = { isFrequencyLimitEnabled = it },
+                            modifier = Modifier.testTag("switch_frequency_limit")
                         )
                     }
 
-                    if (isScheduleEnabled) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = startHour == 9 && endHour == 17,
-                                onClick = {
-                                    startHour = 9
-                                    endHour = 17
-                                },
-                                label = { Text("Work (9-17)") },
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            FilterChip(
-                                selected = startHour == 22 && endHour == 7,
-                                onClick = {
-                                    startHour = 22
-                                    endHour = 7
-                                },
-                                label = { Text("Bedtime (22-7)") },
-                                shape = RoundedCornerShape(8.dp)
-                            )
+                    if (isFrequencyLimitEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Max Opens per App: $maxOpenCount opens in $openWindowMinutes min",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Slider(
+                            value = maxOpenCount.toFloat(),
+                            onValueChange = { maxOpenCount = it.roundToInt() },
+                            valueRange = 1f..20f,
+                            steps = 18
+                        )
+
+                        Text(
+                            text = "Window Reset Duration: $openWindowMinutes minutes",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(listOf(15, 30, 45, 60, 120)) { win ->
+                                FilterChip(
+                                    selected = openWindowMinutes == win,
+                                    onClick = { openWindowMinutes = win },
+                                    label = { Text("${win}m") },
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                            }
                         }
                     }
                 }
 
-                // App Picker Selection Checklist
+                // Independent Limit 2: Daily Screen Time Limit
+                item {
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Daily Screen Time Limit",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Enforce daily screen time quota per app",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isScreenTimeLimitEnabled,
+                            onCheckedChange = { isScreenTimeLimitEnabled = it },
+                            modifier = Modifier.testTag("switch_screentime_limit")
+                        )
+                    }
+
+                    if (isScreenTimeLimitEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Max Screen Time per App: $maxScreenTimeMinutes min / day",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Slider(
+                            value = maxScreenTimeMinutes.toFloat(),
+                            onValueChange = { maxScreenTimeMinutes = it.roundToInt() },
+                            valueRange = 10f..240f,
+                            steps = 22
+                        )
+                    }
+                }
+
+                // App Picker Checklist with dedicated search bar
                 item {
                     HorizontalDivider()
                     Text(
-                        text = "Select Apps in Group (${selectedPackages.size} selected):",
+                        text = "Select Target Apps (${selectedPackages.size} selected):",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Dedicated search bar
+                    OutlinedTextField(
+                        value = appSearchQuery,
+                        onValueChange = { appSearchQuery = it },
+                        placeholder = { Text("Search installed apps...") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                        trailingIcon = {
+                            if (appSearchQuery.isNotEmpty()) {
+                                IconButton(onClick = { appSearchQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_group_app_search")
+                    )
                 }
 
-                items(installedApps, key = { it.packageName }) { appInfo ->
+                items(filteredApps, key = { it.packageName }) { appInfo ->
                     val isChecked = selectedPackages.contains(appInfo.packageName)
                     Row(
                         modifier = Modifier
@@ -656,11 +963,18 @@ private fun AppGroupEditorDialog(
                     ) {
                         AppIconView(packageName = appInfo.packageName, appName = appInfo.appName, size = 32.dp)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = appInfo.appName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = appInfo.appName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = appInfo.category,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Checkbox(
                             checked = isChecked,
                             onCheckedChange = { checked ->
@@ -682,26 +996,24 @@ private fun AppGroupEditorDialog(
                         val groupEntity = AppGroupEntity(
                             id = group?.id ?: 0,
                             name = name.trim(),
-                            iconEmoji = group?.iconEmoji ?: "📱",
+                            iconEmoji = iconEmoji,
                             packageNamesCsv = selectedPackages.joinToString(","),
                             isEnabled = group?.isEnabled ?: true,
                             maxOpenCount = maxOpenCount,
                             openWindowMinutes = openWindowMinutes,
-                            isFrequencyLimitEnabled = true,
+                            isFrequencyLimitEnabled = isFrequencyLimitEnabled,
                             maxScreenTimeMinutes = maxScreenTimeMinutes,
-                            isScreenTimeLimitEnabled = true,
-                            isScheduleEnabled = isScheduleEnabled,
-                            startHour = startHour,
-                            startMinute = 0,
-                            endHour = endHour,
-                            endMinute = 0
+                            isScreenTimeLimitEnabled = isScreenTimeLimitEnabled,
+                            isScheduleEnabled = true,
+                            daysOfWeekCsv = selectedDays.sorted().joinToString(",")
                         )
                         onSave(groupEntity)
                     }
                 },
-                enabled = name.isNotBlank() && selectedPackages.isNotEmpty()
+                enabled = name.isNotBlank() && selectedPackages.isNotEmpty(),
+                modifier = Modifier.testTag("btn_save_group")
             ) {
-                Text("Save Group")
+                Text("Save Group Rules")
             }
         },
         dismissButton = {

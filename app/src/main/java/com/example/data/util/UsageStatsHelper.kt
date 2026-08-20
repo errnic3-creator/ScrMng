@@ -6,7 +6,6 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
@@ -29,15 +28,6 @@ data class RealtimeAppUsage(
     val screenTimeMillisInWindow: Long,
     val lastForegroundTimestamp: Long,
     val windowStartTimestamp: Long = 0L,
-    val windowResetRemainingSeconds: Long = 0L
-)
-
-data class GroupUsageSummary(
-    val groupId: Long,
-    val groupName: String,
-    val combinedOpensInWindow: Int,
-    val combinedScreenTimeMillisToday: Long,
-    val activeForegroundPackage: String? = null,
     val windowResetRemainingSeconds: Long = 0L
 )
 
@@ -86,12 +76,6 @@ object UsageStatsHelper {
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.parse("package:${context.packageName}")
         ).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-    }
-
-    fun getAccessibilitySettingsIntent(): Intent {
-        return Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
     }
@@ -164,7 +148,7 @@ object UsageStatsHelper {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
 
         val endTime = System.currentTimeMillis()
-        val startTime = endTime - 1000 * 60 * 5 // Check last 5 minutes
+        val startTime = endTime - 1000 * 30 // Check last 30 seconds for quick transition detection
 
         val usageEvents = usm.queryEvents(startTime, endTime)
         val event = UsageEvents.Event()
@@ -189,11 +173,14 @@ object UsageStatsHelper {
      * Calculates fixed-window reset open frequency and today's screen time.
      * Fixed-window reset: interval = [floor(now / windowMillis) * windowMillis, intervalStart + windowMillis)
      * Resets automatically to 0 when the window boundary is crossed.
+     * 
+     * Track-On-Add baseline: Any usage prior to `trackedFromTimestamp` is ignored so screen time starts at ZERO.
      */
     fun getUsageForPackage(
         context: Context,
         packageName: String,
-        windowMinutes: Int
+        windowMinutes: Int,
+        trackedFromTimestamp: Long = 0L
     ): RealtimeAppUsage {
         if (!hasUsageStatsPermission(context)) {
             return RealtimeAppUsage(
@@ -221,12 +208,16 @@ object UsageStatsHelper {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        val todayStart = calendar.timeInMillis
+        val todayMidnight = calendar.timeInMillis
+
+        // Effective today start: If app was added today, baseline is trackedFromTimestamp
+        val effectiveTodayStart = if (trackedFromTimestamp > todayMidnight) trackedFromTimestamp else todayMidnight
+        val effectiveWindowStart = if (trackedFromTimestamp > windowStart) trackedFromTimestamp else windowStart
 
         var opensInWindow = 0
         var lastForeground = 0L
 
-        val queryStart = minOf(windowStart, todayStart)
+        val queryStart = minOf(effectiveWindowStart, effectiveTodayStart)
         val usageEvents = usm.queryEvents(queryStart, now)
         val event = UsageEvents.Event()
 
@@ -240,19 +231,20 @@ object UsageStatsHelper {
                 when (event.eventType) {
                     UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
                         lastForeground = event.timeStamp
-                        if (event.timeStamp >= windowStart) {
+                        if (event.timeStamp >= effectiveWindowStart) {
                             opensInWindow++
                         }
                         currentForegroundStart = event.timeStamp
                     }
                     UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.MOVE_TO_BACKGROUND -> {
                         currentForegroundStart?.let { start ->
-                            val duration = event.timeStamp - start
-                            if (start >= todayStart) {
-                                totalTodayScreenTime += duration
+                            val validStartToday = maxOf(start, effectiveTodayStart)
+                            if (event.timeStamp > validStartToday) {
+                                totalTodayScreenTime += (event.timeStamp - validStartToday)
                             }
-                            if (start >= windowStart) {
-                                totalWindowScreenTime += duration
+                            val validStartWindow = maxOf(start, effectiveWindowStart)
+                            if (event.timeStamp > validStartWindow) {
+                                totalWindowScreenTime += (event.timeStamp - validStartWindow)
                             }
                         }
                         currentForegroundStart = null
@@ -262,19 +254,21 @@ object UsageStatsHelper {
         }
 
         currentForegroundStart?.let { start ->
-            val duration = now - start
-            if (start >= todayStart) {
-                totalTodayScreenTime += duration
+            val validStartToday = maxOf(start, effectiveTodayStart)
+            if (now > validStartToday) {
+                totalTodayScreenTime += (now - validStartToday)
             }
-            if (start >= windowStart) {
-                totalWindowScreenTime += duration
+            val validStartWindow = maxOf(start, effectiveWindowStart)
+            if (now > validStartWindow) {
+                totalWindowScreenTime += (now - validStartWindow)
             }
         }
 
-        if (totalTodayScreenTime == 0L) {
+        // Only query aggregate stats if app was tracked before today's start
+        if (totalTodayScreenTime == 0L && trackedFromTimestamp <= todayMidnight) {
             val statsList = usm.queryUsageStats(
                 UsageStatsManager.INTERVAL_DAILY,
-                todayStart,
+                todayMidnight,
                 now
             )
             val appStats = statsList?.find { it.packageName == packageName }
@@ -290,86 +284,6 @@ object UsageStatsHelper {
             screenTimeMillisInWindow = totalWindowScreenTime,
             lastForegroundTimestamp = lastForeground,
             windowStartTimestamp = windowStart,
-            windowResetRemainingSeconds = windowResetRemaining
-        )
-    }
-
-    /**
-     * Calculates combined usage for a list of packages in an App Group.
-     */
-    fun getGroupUsage(
-        context: Context,
-        groupId: Long,
-        groupName: String,
-        packageList: List<String>,
-        windowMinutes: Int
-    ): GroupUsageSummary {
-        if (!hasUsageStatsPermission(context) || packageList.isEmpty()) {
-            return GroupUsageSummary(groupId, groupName, 0, 0L, null, 0L)
-        }
-
-        val packageSet = packageList.toSet()
-        val now = System.currentTimeMillis()
-        val windowMillis = maxOf(1, windowMinutes) * 60 * 1000L
-        val windowStart = (now / windowMillis) * windowMillis
-        val windowEnd = windowStart + windowMillis
-        val windowResetRemaining = maxOf(0L, (windowEnd - now) / 1000L)
-
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = calendar.timeInMillis
-
-        var combinedOpens = 0
-        var combinedScreenTime = 0L
-        var activePkg: String? = null
-
-        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
-            ?: return GroupUsageSummary(groupId, groupName, 0, 0L, null, 0L)
-
-        val queryStart = minOf(windowStart, todayStart)
-        val usageEvents = usm.queryEvents(queryStart, now)
-        val event = UsageEvents.Event()
-
-        val foregroundStarts = mutableMapOf<String, Long>()
-
-        while (usageEvents.hasNextEvent()) {
-            usageEvents.getNextEvent(event)
-            if (packageSet.contains(event.packageName)) {
-                when (event.eventType) {
-                    UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
-                        if (event.timeStamp >= windowStart) {
-                            combinedOpens++
-                        }
-                        foregroundStarts[event.packageName] = event.timeStamp
-                    }
-                    UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-                        foregroundStarts.remove(event.packageName)?.let { start ->
-                            if (start >= todayStart) {
-                                combinedScreenTime += (event.timeStamp - start)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        foregroundStarts.forEach { (pkg, start) ->
-            if (start >= todayStart) {
-                combinedScreenTime += (now - start)
-            }
-            activePkg = pkg
-        }
-
-        return GroupUsageSummary(
-            groupId = groupId,
-            groupName = groupName,
-            combinedOpensInWindow = combinedOpens,
-            combinedScreenTimeMillisToday = combinedScreenTime,
-            activeForegroundPackage = activePkg,
             windowResetRemainingSeconds = windowResetRemaining
         )
     }

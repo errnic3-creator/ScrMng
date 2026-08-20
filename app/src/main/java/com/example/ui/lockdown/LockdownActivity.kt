@@ -5,7 +5,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,8 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -62,7 +59,6 @@ import com.example.ui.components.AppIconView
 import com.example.ui.components.EmergencyOverridePinDialog
 import com.example.ui.components.SetupPinDialog
 import com.example.ui.theme.LockdownRed
-import com.example.ui.theme.OverridePurple
 import com.example.ui.theme.ScreenTimeTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -79,17 +75,19 @@ class LockdownActivity : ComponentActivity() {
         val reason = intent.getStringExtra(EXTRA_REASON) ?: "Limit Exceeded"
         val lockUntil = intent.getLongExtra(EXTRA_LOCK_UNTIL, 0L)
 
+        val settings = (applicationContext as ScreenTimeApplication).settings
+        val currentTheme = settings.selectedTheme
+
         setContent {
-            ScreenTimeTheme(darkTheme = true) {
+            ScreenTimeTheme(themeKey = currentTheme, darkTheme = true) {
                 LockdownScreen(
                     packageName = packageName,
                     appName = appName,
                     reason = reason,
                     initialLockUntil = lockUntil,
                     onEmergencyOverrideGranted = {
-                        // Dismiss overlay and finish activity to allow temporary access
                         LockdownOverlayService.dismiss(this)
-                        finish()
+                        finishAndRemoveTask()
                     },
                     onExitToHome = {
                         LockdownOverlayService.dismiss(this)
@@ -98,22 +96,34 @@ class LockdownActivity : ComponentActivity() {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                         }
                         startActivity(homeIntent)
-                        finish()
+                        finishAndRemoveTask()
                     }
                 )
             }
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Automatically remove from recents stack when navigation transitions away
+        finishAndRemoveTask()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && !isFinishing) {
+            finishAndRemoveTask()
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Prevent back press from resuming locked app - go to Home instead
         val homeIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         startActivity(homeIntent)
-        finish()
+        finishAndRemoveTask()
     }
 
     companion object {
@@ -142,20 +152,40 @@ fun LockdownScreen(
     var showPinDialog by remember { mutableStateOf(false) }
     var showSetupDialog by remember { mutableStateOf(false) }
 
+    var targetLockUntil by remember(initialLockUntil) {
+        mutableLongStateOf(
+            if (initialLockUntil > System.currentTimeMillis()) initialLockUntil
+            else (System.currentTimeMillis() + 30 * 60 * 1000L)
+        )
+    }
+
+    // Refresh lock status from DB if available
+    LaunchedEffect(packageName) {
+        if (packageName.isNotEmpty()) {
+            val app = repository.getTrackedApp(packageName)
+            if (app != null && app.isLocked && app.lockUntilTimestamp > System.currentTimeMillis()) {
+                targetLockUntil = app.lockUntilTimestamp
+            }
+        }
+    }
+
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val lockUntil = if (initialLockUntil > 0) initialLockUntil else (System.currentTimeMillis() + 30 * 60 * 1000L)
 
     LaunchedEffect(Unit) {
         while (isActive) {
             currentTime = System.currentTimeMillis()
-            delay(1000L)
+            delay(500L)
         }
     }
 
-    val remainingSeconds = maxOf(0L, (lockUntil - currentTime) / 1000L)
+    val remainingSeconds = maxOf(0L, (targetLockUntil - currentTime) / 1000L)
     val hours = remainingSeconds / 3600
     val minutes = (remainingSeconds % 3600) / 60
     val seconds = remainingSeconds % 60
+
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val backgroundColor = MaterialTheme.colorScheme.background
+    val surfaceColor = MaterialTheme.colorScheme.surface
 
     Box(
         modifier = modifier
@@ -163,9 +193,9 @@ fun LockdownScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF0F172A),
-                        Color(0xFF1E1B4B),
-                        Color(0xFF3B0764)
+                        backgroundColor,
+                        surfaceColor,
+                        primaryColor.copy(alpha = 0.25f)
                     )
                 )
             )
@@ -212,7 +242,7 @@ fun LockdownScreen(
                 text = "Screen Time Limit Breached",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
             )
 
@@ -221,7 +251,7 @@ fun LockdownScreen(
             // App details card
             Card(
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.08f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -241,7 +271,7 @@ fun LockdownScreen(
                             text = appName,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
 
@@ -271,7 +301,7 @@ fun LockdownScreen(
                     text = "LOCKDOWN TIMER",
                     style = MaterialTheme.typography.labelSmall,
                     letterSpacing = 1.5.sp,
-                    color = Color.White.copy(alpha = 0.6f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -284,13 +314,13 @@ fun LockdownScreen(
                     },
                     style = MaterialTheme.typography.displayMedium,
                     fontWeight = FontWeight.Black,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onBackground
                 )
 
                 Text(
                     text = "App will unlock automatically when timer expires",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                 )
             }
 
@@ -305,7 +335,10 @@ fun LockdownScreen(
                         showSetupDialog = true
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = OverridePurple),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -330,7 +363,7 @@ fun LockdownScreen(
             OutlinedButton(
                 onClick = onExitToHome,
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)

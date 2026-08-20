@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.ScreenTimeApplication
+import com.example.data.model.TrackedAppEntity
 import com.example.data.util.UsageStatsHelper
 import com.example.ui.lockdown.LockdownActivity
 import kotlinx.coroutines.CoroutineScope
@@ -88,91 +89,83 @@ class AppMonitorService : Service() {
                         val currentPackage = UsageStatsHelper.getCurrentForegroundPackage(this@AppMonitorService)
 
                         if (currentPackage != null && currentPackage != packageName) {
-                            // Check individual tracked app
                             val trackedApp = repository.getTrackedApp(currentPackage)
                             val allGroups = if (settings.isGroupLimitsEnabled) repository.getAllGroupsList() else emptyList()
                             val relevantGroup = allGroups.find { it.isEnabled && it.containsPackage(currentPackage) }
 
-                            if (trackedApp != null && trackedApp.isLimitEnabled) {
-                                val status = repository.evaluateAppStatus(trackedApp)
+                            var appToEvaluate: TrackedAppEntity? = trackedApp
+                            if (appToEvaluate == null && relevantGroup != null && relevantGroup.isTodayActive()) {
+                                appToEvaluate = TrackedAppEntity(
+                                    packageName = currentPackage,
+                                    appName = currentPackage.substringAfterLast('.'),
+                                    maxOpenCount = relevantGroup.maxOpenCount,
+                                    openWindowMinutes = relevantGroup.openWindowMinutes,
+                                    isFrequencyLimitEnabled = relevantGroup.isFrequencyLimitEnabled,
+                                    maxScreenTimeMinutes = relevantGroup.maxScreenTimeMinutes,
+                                    isScreenTimeLimitEnabled = relevantGroup.isScreenTimeLimitEnabled,
+                                    isLimitEnabled = true,
+                                    category = relevantGroup.name
+                                )
+                            }
+
+                            if (appToEvaluate != null && appToEvaluate.isLimitEnabled) {
+                                val status = repository.evaluateAppStatus(appToEvaluate)
 
                                 if (status.isUnderEmergencyOverride) {
-                                    // Allowed under emergency override
                                     if (settings.isFloatingTimerEnabled) {
                                         val remainingMin = (status.overrideRemainingSeconds / 60).toInt()
                                         FloatingTimerOverlayService.update(
                                             context = this@AppMonitorService,
-                                            appName = trackedApp.appName,
-                                            packageName = trackedApp.packageName,
+                                            appName = appToEvaluate.appName,
+                                            packageName = appToEvaluate.packageName,
                                             remainingMinutes = remainingMin,
                                             isWarning = true
                                         )
                                     }
                                 } else if (status.entity.isLocked || status.isFrequencyBreached || status.isScreenTimeBreached) {
-                                    // Trigger dynamic lockdown
                                     val reason = when {
                                         status.isFrequencyBreached ->
-                                            "Exceeded ${trackedApp.maxOpenCount} opens in ${trackedApp.openWindowMinutes}m window"
+                                            "Exceeded ${appToEvaluate.maxOpenCount} opens in ${appToEvaluate.openWindowMinutes}m window"
                                         status.isScreenTimeBreached ->
-                                            "Exceeded ${trackedApp.maxScreenTimeMinutes}m daily screen time"
+                                            "Exceeded ${appToEvaluate.maxScreenTimeMinutes}m daily screen time"
                                         else -> status.entity.lockReason.ifEmpty { "Screen time limit breached" }
                                     }
 
-                                    // Dynamic lockdown duration rule:
-                                    // Frequency breach -> openWindowMinutes
-                                    // Screen time breach -> settings.autoLockDurationMinutes
-                                    val lockDuration = if (status.isFrequencyBreached) {
-                                        trackedApp.openWindowMinutes
+                                    // Lockdown duration automatically matches configured Launch Frequency window time
+                                    val lockDuration = maxOf(1, appToEvaluate.openWindowMinutes)
+                                    val lockUntil = if (appToEvaluate.isLocked && appToEvaluate.lockUntilTimestamp > System.currentTimeMillis()) {
+                                        appToEvaluate.lockUntilTimestamp
                                     } else {
-                                        settings.autoLockDurationMinutes
+                                        System.currentTimeMillis() + (lockDuration * 60 * 1000L)
                                     }
 
-                                    if (!trackedApp.isLocked) {
+                                    if (!appToEvaluate.isLocked) {
                                         repository.lockApp(
-                                            packageName = trackedApp.packageName,
+                                            packageName = appToEvaluate.packageName,
                                             reason = reason,
                                             durationMinutes = lockDuration
                                         )
                                     }
 
                                     FloatingTimerOverlayService.hide(this@AppMonitorService)
-                                    triggerLockdownUi(trackedApp.packageName, trackedApp.appName, reason, trackedApp.lockUntilTimestamp)
+                                    triggerLockdownUi(appToEvaluate.packageName, appToEvaluate.appName, reason, lockUntil)
                                 } else {
-                                    // Normal allowed usage
-                                    if (settings.isFloatingTimerEnabled && trackedApp.isScreenTimeLimitEnabled) {
+                                    if (settings.isFloatingTimerEnabled && appToEvaluate.isScreenTimeLimitEnabled) {
                                         val screenTimeMinutes = (status.usage.screenTimeMillisToday / (60 * 1000)).toInt()
-                                        val remainingMinutes = maxOf(0, trackedApp.maxScreenTimeMinutes - screenTimeMinutes)
+                                        val remainingMinutes = maxOf(0, appToEvaluate.maxScreenTimeMinutes - screenTimeMinutes)
                                         FloatingTimerOverlayService.update(
                                             context = this@AppMonitorService,
-                                            appName = trackedApp.appName,
-                                            packageName = trackedApp.packageName,
+                                            appName = appToEvaluate.appName,
+                                            packageName = appToEvaluate.packageName,
                                             remainingMinutes = remainingMinutes,
                                             isWarning = remainingMinutes <= 5
                                         )
                                     }
                                 }
-                            } else if (relevantGroup != null) {
-                                // Evaluate group status
-                                val groupStatus = repository.evaluateGroupStatus(relevantGroup)
-                                if (!groupStatus.isUnderEmergencyOverride &&
-                                    (relevantGroup.isLocked || groupStatus.isFrequencyBreached || groupStatus.isScreenTimeBreached || groupStatus.isScheduleActive)) {
-
-                                    val reason = when {
-                                        groupStatus.isScheduleActive -> "Active schedule restriction for group: ${relevantGroup.name}"
-                                        groupStatus.isFrequencyBreached -> "Group limit: Exceeded ${relevantGroup.maxOpenCount} opens"
-                                        groupStatus.isScreenTimeBreached -> "Group limit: Exceeded ${relevantGroup.maxScreenTimeMinutes}m screen time"
-                                        else -> relevantGroup.lockReason.ifEmpty { "Group limit reached" }
-                                    }
-
-                                    FloatingTimerOverlayService.hide(this@AppMonitorService)
-                                    triggerLockdownUi(currentPackage, relevantGroup.name, reason, relevantGroup.lockUntilTimestamp)
-                                }
                             } else {
-                                // Not a monitored app
                                 FloatingTimerOverlayService.hide(this@AppMonitorService)
                             }
                         } else {
-                            // Home / launcher / self
                             FloatingTimerOverlayService.hide(this@AppMonitorService)
                         }
                     }
@@ -180,7 +173,7 @@ class AppMonitorService : Service() {
                     e.printStackTrace()
                 }
 
-                delay(1500L) // Polling interval
+                delay(800L) // Responsive polling interval
             }
         }
     }
@@ -198,12 +191,10 @@ class AppMonitorService : Service() {
         lastNotificationTime = now
         lastHandledPackage = targetPackageName
 
-        // If overlay permission granted, launch overlay
         if (UsageStatsHelper.hasOverlayPermission(this)) {
             LockdownOverlayService.show(this, targetPackageName, appName, reason, lockUntil)
         }
 
-        // Also launch LockdownActivity
         val lockIntent = Intent(this, LockdownActivity::class.java).apply {
             putExtra(LockdownActivity.EXTRA_PACKAGE_NAME, targetPackageName)
             putExtra(LockdownActivity.EXTRA_APP_NAME, appName)
