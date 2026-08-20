@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -474,6 +475,33 @@ fun AppDetailLimitScreen(
             // Save & Lockdown Actions
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (isLocked) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = com.example.ui.theme.LockdownRed.copy(alpha = 0.12f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Locked",
+                                    tint = com.example.ui.theme.LockdownRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Rules cannot be modified while this app is locked. Use Emergency Pass or wait for lockout timer to expire.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = com.example.ui.theme.LockdownRed,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
                     Button(
                         onClick = {
                             viewModel.updateTrackedApp(
@@ -489,6 +517,7 @@ fun AppDetailLimitScreen(
                             )
                             onNavigateBack()
                         },
+                        enabled = !isLocked,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -497,7 +526,7 @@ fun AppDetailLimitScreen(
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Save Limit Settings", fontWeight = FontWeight.Bold)
+                        Text(if (isLocked) "Rules Locked" else "Save Limit Settings", fontWeight = FontWeight.Bold)
                     }
 
                     Row(

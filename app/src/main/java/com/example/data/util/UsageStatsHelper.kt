@@ -170,17 +170,19 @@ object UsageStatsHelper {
     }
 
     /**
-     * Calculates fixed-window reset open frequency and today's screen time.
-     * Fixed-window reset: interval = [floor(now / windowMillis) * windowMillis, intervalStart + windowMillis)
-     * Resets automatically to 0 when the window boundary is crossed.
+     * Calculates trigger-on-limit open frequency and today's screen time.
+     * Open counter tracks opens without countdown timer until max limit is reached.
+     * Countdown timer activates only during active lockout and resets open counts upon expiry.
      * 
-     * Track-On-Add baseline: Any usage prior to `trackedFromTimestamp` is ignored so screen time starts at ZERO.
+     * Track-On-Add baseline: Any usage prior to `trackedFromTimestamp` or prior to `lastLockUntilTimestamp`
+     * (previous expired lockdown cycle) is ignored so open count starts at ZERO.
      */
     fun getUsageForPackage(
         context: Context,
         packageName: String,
         windowMinutes: Int,
-        trackedFromTimestamp: Long = 0L
+        trackedFromTimestamp: Long = 0L,
+        lastLockUntilTimestamp: Long = 0L
     ): RealtimeAppUsage {
         if (!hasUsageStatsPermission(context)) {
             return RealtimeAppUsage(
@@ -197,9 +199,23 @@ object UsageStatsHelper {
 
         val now = System.currentTimeMillis()
         val windowMillis = maxOf(1, windowMinutes) * 60 * 1000L
-        val windowStart = (now / windowMillis) * windowMillis
-        val windowEnd = windowStart + windowMillis
-        val windowResetRemaining = maxOf(0L, (windowEnd - now) / 1000L)
+
+        // Baseline for open counting:
+        // If lastLockUntilTimestamp is in the future (currently locked), open cycle started when that lock was initiated.
+        // If lastLockUntilTimestamp is in the past (previous lock expired), baseline is that expiry timestamp so opens reset to 0.
+        val openCycleStart = if (lastLockUntilTimestamp > now) {
+            maxOf(trackedFromTimestamp, lastLockUntilTimestamp - windowMillis)
+        } else if (lastLockUntilTimestamp > 0L) {
+            maxOf(trackedFromTimestamp, lastLockUntilTimestamp)
+        } else {
+            trackedFromTimestamp
+        }
+
+        val windowResetRemaining = if (lastLockUntilTimestamp > now) {
+            maxOf(0L, (lastLockUntilTimestamp - now) / 1000L)
+        } else {
+            0L // Inactive when below limit / not in lockdown
+        }
 
         // Today start (midnight)
         val calendar = Calendar.getInstance().apply {
@@ -210,14 +226,14 @@ object UsageStatsHelper {
         }
         val todayMidnight = calendar.timeInMillis
 
-        // Effective today start: If app was added today, baseline is trackedFromTimestamp
+        // Effective today start for screen time tracking
         val effectiveTodayStart = if (trackedFromTimestamp > todayMidnight) trackedFromTimestamp else todayMidnight
-        val effectiveWindowStart = if (trackedFromTimestamp > windowStart) trackedFromTimestamp else windowStart
+        val effectiveOpenStart = if (openCycleStart > todayMidnight) openCycleStart else todayMidnight
 
         var opensInWindow = 0
         var lastForeground = 0L
 
-        val queryStart = minOf(effectiveWindowStart, effectiveTodayStart)
+        val queryStart = minOf(effectiveOpenStart, effectiveTodayStart)
         val usageEvents = usm.queryEvents(queryStart, now)
         val event = UsageEvents.Event()
 
@@ -231,7 +247,7 @@ object UsageStatsHelper {
                 when (event.eventType) {
                     UsageEvents.Event.ACTIVITY_RESUMED, UsageEvents.Event.MOVE_TO_FOREGROUND -> {
                         lastForeground = event.timeStamp
-                        if (event.timeStamp >= effectiveWindowStart) {
+                        if (event.timeStamp >= openCycleStart) {
                             opensInWindow++
                         }
                         currentForegroundStart = event.timeStamp
@@ -242,7 +258,7 @@ object UsageStatsHelper {
                             if (event.timeStamp > validStartToday) {
                                 totalTodayScreenTime += (event.timeStamp - validStartToday)
                             }
-                            val validStartWindow = maxOf(start, effectiveWindowStart)
+                            val validStartWindow = maxOf(start, openCycleStart)
                             if (event.timeStamp > validStartWindow) {
                                 totalWindowScreenTime += (event.timeStamp - validStartWindow)
                             }
@@ -258,7 +274,7 @@ object UsageStatsHelper {
             if (now > validStartToday) {
                 totalTodayScreenTime += (now - validStartToday)
             }
-            val validStartWindow = maxOf(start, effectiveWindowStart)
+            val validStartWindow = maxOf(start, openCycleStart)
             if (now > validStartWindow) {
                 totalWindowScreenTime += (now - validStartWindow)
             }
@@ -283,7 +299,7 @@ object UsageStatsHelper {
             screenTimeMillisToday = totalTodayScreenTime,
             screenTimeMillisInWindow = totalWindowScreenTime,
             lastForegroundTimestamp = lastForeground,
-            windowStartTimestamp = windowStart,
+            windowStartTimestamp = openCycleStart,
             windowResetRemainingSeconds = windowResetRemaining
         )
     }

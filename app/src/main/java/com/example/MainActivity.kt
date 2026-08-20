@@ -63,6 +63,10 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         viewModel.checkPermissions()
         viewModel.refreshUsage()
+        val app = application as? ScreenTimeApplication
+        if (app?.settings?.isMonitorServiceEnabled == true && com.example.data.util.UsageStatsHelper.hasUsageStatsPermission(this)) {
+            com.example.service.AppMonitorService.start(this)
+        }
     }
 }
 

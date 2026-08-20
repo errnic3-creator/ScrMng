@@ -492,27 +492,52 @@ fun HomeGroupCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Footer action
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onEditGroup() }
-                    .padding(top = 4.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Edit Group Rules",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
+            val isAnyMemberLocked = memberApps.any { it.entity.isLocked || it.isFrequencyBreached || it.isScreenTimeBreached }
+            if (isAnyMemberLocked) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Rules Locked",
+                        tint = LockdownRed,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Rules Locked During Lockout",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = LockdownRed
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEditGroup() }
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Edit Group Rules",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
@@ -889,18 +914,23 @@ fun TrackedAppCard(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // 1. Launch Frequency Progress (Fixed Window)
+            // 1. Launch Frequency Progress (Trigger on Limit)
             if (entity.isFrequencyLimitEnabled) {
-                val resetRemainingMin = (usage.windowResetRemainingSeconds / 60).toInt()
-                val resetRemainingSec = (usage.windowResetRemainingSeconds % 60).toInt()
-                val resetFormatted = String.format("%02d:%02d", resetRemainingMin, resetRemainingSec)
+                val subLabelText = if (usage.windowResetRemainingSeconds > 0L) {
+                    val resetRemainingMin = (usage.windowResetRemainingSeconds / 60).toInt()
+                    val resetRemainingSec = (usage.windowResetRemainingSeconds % 60).toInt()
+                    val resetFormatted = String.format("%02d:%02d", resetRemainingMin, resetRemainingSec)
+                    "Resets in $resetFormatted"
+                } else {
+                    "Timer starts on limit"
+                }
 
                 UsageProgressBar(
                     current = usage.opensInWindow,
                     max = entity.maxOpenCount,
-                    label = "Launch Frequency (Fixed ${entity.openWindowMinutes}m window)",
+                    label = "Launch Frequency (Limit: ${entity.maxOpenCount} opens)",
                     unit = "opens",
-                    subLabel = "Resets in $resetFormatted"
+                    subLabel = subLabelText
                 )
                 Spacer(modifier = Modifier.height(10.dp))
             }
@@ -947,26 +977,51 @@ fun TrackedAppCard(
                     }
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onCardClick() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "Edit Rules",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                if (isLocked) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Locked",
+                            tint = LockdownRed,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Rules Locked",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = LockdownRed
+                        )
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onCardClick() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("btn_edit_rules_${entity.packageName}")
+                    ) {
+                        Text(
+                            text = "Edit Rules",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

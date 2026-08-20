@@ -114,12 +114,11 @@ class AppMonitorService : Service() {
                                 if (status.isUnderEmergencyOverride) {
                                     // Override Session active: bypass limit enforcement and do NOT trigger lockdown
                                     if (settings.isFloatingTimerEnabled) {
-                                        val remainingMin = maxOf(1, (status.overrideRemainingSeconds / 60).toInt())
                                         FloatingTimerOverlayService.update(
                                             context = this@AppMonitorService,
                                             appName = appToEvaluate.appName,
                                             packageName = appToEvaluate.packageName,
-                                            remainingMinutes = remainingMin,
+                                            remainingSeconds = status.overrideRemainingSeconds,
                                             isWarning = true
                                         )
                                     }
@@ -136,9 +135,6 @@ class AppMonitorService : Service() {
                                     val now = System.currentTimeMillis()
                                     val lockUntil = if (appToEvaluate.isLocked && appToEvaluate.lockUntilTimestamp > now) {
                                         appToEvaluate.lockUntilTimestamp
-                                    } else if (status.isFrequencyBreached && status.usage.windowStartTimestamp > 0L) {
-                                        val windowEnd = status.usage.windowStartTimestamp + (maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
-                                        if (windowEnd > now) windowEnd else (now + maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
                                     } else {
                                         now + (maxOf(1, appToEvaluate.openWindowMinutes) * 60 * 1000L)
                                     }
@@ -155,14 +151,14 @@ class AppMonitorService : Service() {
                                     triggerLockdownUi(appToEvaluate.packageName, appToEvaluate.appName, reason, lockUntil)
                                 } else {
                                     if (settings.isFloatingTimerEnabled && appToEvaluate.isScreenTimeLimitEnabled) {
-                                        val screenTimeMinutes = (status.usage.screenTimeMillisToday / (60 * 1000)).toInt()
-                                        val remainingMinutes = maxOf(0, appToEvaluate.maxScreenTimeMinutes - screenTimeMinutes)
+                                        val remainingMillis = maxOf(0L, (appToEvaluate.maxScreenTimeMinutes * 60 * 1000L) - status.usage.screenTimeMillisToday)
+                                        val remainingSeconds = remainingMillis / 1000L
                                         FloatingTimerOverlayService.update(
                                             context = this@AppMonitorService,
                                             appName = appToEvaluate.appName,
                                             packageName = appToEvaluate.packageName,
-                                            remainingMinutes = remainingMinutes,
-                                            isWarning = remainingMinutes <= 5
+                                            remainingSeconds = remainingSeconds,
+                                            isWarning = remainingSeconds <= 300L
                                         )
                                     }
                                 }

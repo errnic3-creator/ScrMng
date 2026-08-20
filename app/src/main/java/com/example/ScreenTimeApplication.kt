@@ -35,6 +35,11 @@ class ScreenTimeApplication : Application() {
         )
 
         createNotificationChannels()
+
+        // Auto-enforce on startup if enabled and permissions are granted
+        if (settings.isMonitorServiceEnabled && com.example.data.util.UsageStatsHelper.hasUsageStatsPermission(this)) {
+            com.example.service.AppMonitorService.start(this)
+        }
     }
 
     private fun createNotificationChannels() {

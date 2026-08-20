@@ -296,16 +296,19 @@ class AppLimitRepository(
 
     /**
      * Checks an individual app's live usage against configured limits.
-     * Uses track-on-add baseline and fixed-interval window-based reset logic.
+     * Uses trigger-on-limit open baseline and countdown timer logic.
      * Freezes launch increments on limit breach to prevent count overflow.
      */
     fun evaluateAppStatus(app: TrackedAppEntity): TrackedAppWithUsage {
         val now = System.currentTimeMillis()
+        val isLockExpired = app.isLocked && app.lockUntilTimestamp in 1..now
+
         val rawUsage = UsageStatsHelper.getUsageForPackage(
             context = context,
             packageName = app.packageName,
             windowMinutes = app.openWindowMinutes,
-            trackedFromTimestamp = app.addedTimestamp
+            trackedFromTimestamp = app.addedTimestamp,
+            lastLockUntilTimestamp = app.lockUntilTimestamp
         )
 
         val isUnderOverride = app.emergencyOverrideUntilTimestamp > now
@@ -313,8 +316,8 @@ class AppLimitRepository(
             (app.emergencyOverrideUntilTimestamp - now) / 1000L
         } else 0L
 
-        val isLockedByTimer = app.isLocked && (app.lockUntilTimestamp > now || app.lockUntilTimestamp == 0L)
-        val lockRemainingSeconds = if (app.isLocked && app.lockUntilTimestamp > now) {
+        val isLockedByTimer = !isLockExpired && app.isLocked && (app.lockUntilTimestamp > now || app.lockUntilTimestamp == 0L)
+        val lockRemainingSeconds = if (!isLockExpired && app.isLocked && app.lockUntilTimestamp > now) {
             (app.lockUntilTimestamp - now) / 1000L
         } else 0L
 
@@ -336,16 +339,36 @@ class AppLimitRepository(
             rawUsage.opensInWindow
         }
 
-        val usage = rawUsage.copy(opensInWindow = clampedOpens)
+        // Window reset remaining: only active during lockout or when limit is hit
+        val windowResetRemaining = if (lockRemainingSeconds > 0L) {
+            lockRemainingSeconds
+        } else if (isFrequencyBreached && !isUnderOverride) {
+            maxOf(1, app.openWindowMinutes) * 60L
+        } else {
+            0L // Inactive when below limit
+        }
+
+        val usage = rawUsage.copy(
+            opensInWindow = clampedOpens,
+            windowResetRemainingSeconds = windowResetRemaining
+        )
+
+        val effectiveLockSeconds = if (lockRemainingSeconds > 0L) {
+            lockRemainingSeconds
+        } else if (isFrequencyBreached && !isUnderOverride) {
+            windowResetRemaining
+        } else {
+            0L
+        }
 
         return TrackedAppWithUsage(
-            entity = app,
+            entity = if (isLockExpired) app.copy(isLocked = false) else app,
             usage = usage,
             isFrequencyBreached = isFrequencyBreached,
             isScreenTimeBreached = isScreenTimeBreached,
             isUnderEmergencyOverride = isUnderOverride,
             overrideRemainingSeconds = overrideRemainingSeconds,
-            lockRemainingSeconds = lockRemainingSeconds
+            lockRemainingSeconds = effectiveLockSeconds
         )
     }
 
